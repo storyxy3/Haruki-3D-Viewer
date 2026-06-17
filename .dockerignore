@@ -1,0 +1,15 @@
+.git/
+.github/
+node_modules/
+dist/
+Dockerfile
+.dockerignore
+*.log
+.DS_Store
+
+# Runtime package captures and local data should not be baked into the image.
+captures/
+capture-output/
+runtime-packages/
+AssetBundles/
+master/

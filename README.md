@@ -25,6 +25,20 @@ Open the local Vite URL and select a full runtime package folder or a generated 
 
 The preferred full package is the lean runtime export from `Haruki-3D-Exporter`. Part registry packages enable custom body/head/hair/head-optional switching only within one character; switching character requires loading another package.
 
+## Docker
+
+Build and run the static viewer image:
+
+```bash
+docker build -t haruki-3d-viewer .
+docker run --rm -p 8080:80 haruki-3d-viewer
+```
+
+Open `http://localhost:8080` and import a runtime package folder in the browser.
+
+GitHub Actions builds and publishes the image to GHCR on `main` and version
+tags. Pull requests only build the image.
+
 ## Capture Mode
 
 Generate a deterministic browser screenshot from a full runtime package folder:

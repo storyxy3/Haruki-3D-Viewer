@@ -764,7 +764,7 @@ export function createSekaiFaceMaterial(initial: FaceMaterialUniforms) {
             sdfUv.x = 1.0 - sdfUv.x;
           }
           float sdfValue = texture2D(uFaceShadowTex, sdfUv).r;
-          // sssekai helper semantics: compare SDF against horizontal angle
+          // Runtime face SDF semantics: compare SDF against horizontal angle.
           // acos(max(dot(front, light), 0)) / (pi / 2). Flip only mirrors UV.
           float sdfLimit = acos(max(faceFront, 0.0)) / 1.5707963;
           sdfLimit *= clamp(uFaceSdfUseLightDirection, 0.0, 1.0);

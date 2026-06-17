@@ -362,7 +362,7 @@ export const sekaiVrmMigrationProfile: SekaiVrmMigrationProfile = {
     "plugin/viewer tuned preview lighting",
   ],
   unresolvedBeforeTrueParity: [
-    "browser equivalent of sssekai SekaiBoneBasisDriver for true face SDF",
+    "browser equivalent of the runtime face SDF bone-basis driver",
     "VRM expression or VRMA export for portable face motion",
     "exact Unity shader controller animation tracks",
   ],
