@@ -1,13 +1,25 @@
 {
-  "name": "haruki-3d-viewer",
+  "name": "haruki-3d-engine",
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "module": "./dist/haruki-3d-engine.js",
+  "types": "./dist/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/types/index.d.ts",
+      "import": "./dist/haruki-3d-engine.js"
+    }
+  },
   "scripts": {
-    "dev": "vite",
-    "build": "tsc --noEmit && vite build",
-    "preview": "vite preview",
-    "capture:runtime": "node capture-runtime.mjs"
+    "dev:capture": "vite --config vite.capture.config.ts",
+    "build": "npm run build:types && npm run build:lib && npm run build:capture",
+    "build:types": "tsc -p tsconfig.build.json",
+    "build:lib": "vite build",
+    "build:capture": "vite build --config vite.capture.config.ts",
+    "preview:capture": "vite preview --config vite.capture.config.ts",
+    "capture:runtime": "node capture-runtime.mjs",
+    "capture:server": "node capture-server.mjs"
   },
   "dependencies": {
     "@pixiv/three-vrm": "^3.5.3",

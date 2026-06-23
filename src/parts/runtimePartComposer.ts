@@ -2,9 +2,10 @@ import type {
   BodyAssetManifest,
   HeadAssetManifest,
 } from "../data/sampleScene";
-import type { RuntimeCombinedCharacterAsset } from "../engine/PjskViewerApp";
+import type { RuntimeCombinedCharacterAsset } from "../engine/Haruki3DEngine";
 
 export type RuntimePartType = "body" | "head" | "hair" | "head_optional";
+export type CustomPartSelectionOrigin = "custom" | "official_preset";
 
 export type PartRegistryEntry = {
   costume3dId: number;
@@ -83,17 +84,18 @@ export type PartPackageSet = {
 
 export type CustomPartSelection = {
   characterId: number;
-  unit?: string | null;
+  unit: string | null;
   bodyCostume3dId: number;
   headCostume3dId: number;
   hairCostume3dId: number;
   headOptionalCostume3dId?: number | null;
+  origin?: CustomPartSelectionOrigin;
 };
 
 export type ComposePartAssetInput = {
   partSet: PartPackageSet;
   selection: CustomPartSelection;
-  activeCharacterId: number | null;
+  activeRoleId: string | null;
   resolveUrl: (path: string) => string;
 };
 
@@ -103,13 +105,97 @@ type RuntimeSetup = {
   rootSelectionProfile?: Record<string, unknown>;
   setupPlan?: Record<string, unknown>;
   activeRootProfile?: Record<string, unknown>;
-  managers?: unknown[];
-  bones?: unknown[];
-  colliders?: unknown[];
-  colliderBindings?: unknown[];
-  managerColliderCaches?: unknown[];
+  bindingDecisions?: RuntimeBindingDecision[];
+  managers?: RuntimeManager[];
+  bones?: RuntimeBone[];
+  colliders?: RuntimeCollider[];
+  colliderBindings?: RuntimeColliderBinding[];
+  managerColliderCaches?: RuntimeManagerColliderCache[];
   warnings?: string[];
   [key: string]: unknown;
+};
+
+type RuntimeManager = Record<string, unknown> & {
+  partKind?: string;
+  pathId?: number;
+  nodeName?: string | null;
+  nodePath?: string | null;
+  poseRoot?: string | null;
+  bonePathIds?: number[];
+};
+
+type RuntimeBone = Record<string, unknown> & {
+  partKind?: string;
+  pathId?: number;
+  nodeName?: string | null;
+  nodePath?: string | null;
+  poseRoot?: string | null;
+  colliderFlag?: number;
+  directColliderPathIds?: number[];
+};
+
+type RuntimeCollider = Record<string, unknown> & {
+  partKind?: string;
+  index?: number;
+  pathId?: number;
+  scriptName?: string;
+  nodeName?: string | null;
+  nodePath?: string | null;
+  poseRoot?: string | null;
+};
+
+type RuntimeColliderBinding = Record<string, unknown> & {
+  sourceKind?: string | null;
+  partKind?: string;
+  sourceSpringBonePathId?: number;
+  colliderFlag?: number | null;
+  matchedPrefixes?: string[] | null;
+  collidersByRoot?: Record<string, number[]> | null;
+  defaultRoot?: string | null;
+  sourceColliderPathIds?: number[];
+  colliders?: number[];
+};
+
+type RuntimeBindingDecision = Record<string, unknown> & {
+  sourceKind?: string | null;
+  partKind?: string;
+  sourceSpringBonePathId?: number;
+  nodePath?: string | null;
+  poseRoot?: string | null;
+  colliderFlag?: number | null;
+  directColliderPathIds?: number[];
+  candidateRoots?: Record<string, number[]> | null;
+  defaultRoot?: string | null;
+  selectedColliderIndexes?: number[];
+  reason?: string;
+};
+
+type RuntimeManagerColliderCache = Record<string, unknown> & {
+  managerPathId?: number;
+  partKind?: string;
+  sourcePoseRoot?: string | null;
+  managerNodeName?: string | null;
+  managerNodePath?: string | null;
+  springBonePathIds?: number[];
+  sphereColliderIndexes?: number[];
+  capsuleColliderIndexes?: number[];
+  panelColliderIndexes?: number[];
+};
+
+type RuntimePartWithIndex = {
+  runtime: PartRuntimePackage;
+  partIndex: number;
+  partType: RuntimePartType;
+};
+
+type RemappedRuntimePart = RuntimePartWithIndex & {
+  setup: RuntimeSetup;
+  managers: RuntimeManager[];
+  bones: RuntimeBone[];
+  colliders: RuntimeCollider[];
+  colliderBindings: RuntimeColliderBinding[];
+  managerColliderCaches: RuntimeManagerColliderCache[];
+  activeRoots: string[];
 };
 
 export function normalizeRuntimePartType(value: string): RuntimePartType {
@@ -123,6 +209,18 @@ export function normalizeRuntimePartType(value: string): RuntimePartType {
   throw new Error(`Unsupported runtime part type: ${value}`);
 }
 
+export function tryNormalizeRuntimePartType(value: string): RuntimePartType | null {
+  try {
+    return normalizeRuntimePartType(value);
+  } catch {
+    return null;
+  }
+}
+
+export function runtimeRoleId(characterId: number, unit: string | null | undefined) {
+  return `${characterId}:${normalizeUnit(unit)}`;
+}
+
 export function getCharacterIndexEntries(index: Character3dIndex): Character3dIndexEntry[] {
   return index.entries ?? index.character3ds ?? [];
 }
@@ -130,12 +228,12 @@ export function getCharacterIndexEntries(index: Character3dIndex): Character3dIn
 export function getDefaultCustomSelection(partSet: PartPackageSet): CustomPartSelection | null {
   const preset = partSet.characterIndex.find((entry) =>
     hasCompletePresetParts(entry) &&
-    hasLoadedPart(partSet, entry.characterId, "body", entry.bodyCostume3dId) &&
-    hasLoadedPart(partSet, entry.characterId, "head", entry.headCostume3dId) &&
-    hasLoadedPart(partSet, entry.characterId, "hair", entry.hairCostume3dId) &&
+    hasLoadedPart(partSet, entry.characterId, entry.unit ?? null, "body", entry.bodyCostume3dId) &&
+    hasLoadedPart(partSet, entry.characterId, entry.unit ?? null, "head", entry.headCostume3dId) &&
+    hasLoadedPart(partSet, entry.characterId, entry.unit ?? null, "hair", entry.hairCostume3dId) &&
     (
       !entry.headOptionalCostume3dId ||
-      hasLoadedPart(partSet, entry.characterId, "head_optional", entry.headOptionalCostume3dId)
+      hasLoadedPart(partSet, entry.characterId, entry.unit ?? null, "head_optional", entry.headOptionalCostume3dId)
     )
   );
   if (preset) {
@@ -144,11 +242,12 @@ export function getDefaultCustomSelection(partSet: PartPackageSet): CustomPartSe
     const hairCostume3dId = preset.hairCostume3dId!;
     return {
       characterId: preset.characterId,
-      unit: preset.unit,
+      unit: preset.unit ?? null,
       bodyCostume3dId,
       headCostume3dId,
       hairCostume3dId,
       headOptionalCostume3dId: preset.headOptionalCostume3dId ?? null,
+      origin: "official_preset",
     };
   }
 
@@ -156,7 +255,7 @@ export function getDefaultCustomSelection(partSet: PartPackageSet): CustomPartSe
   if (!body) {
     return null;
   }
-  const headHairPair = findFirstCompatibleLoadedHeadHair(partSet, body.characterId);
+  const headHairPair = findFirstCompatibleLoadedHeadHair(partSet, body.characterId, body.unit ?? null);
   if (!headHairPair) {
     return null;
   }
@@ -168,40 +267,44 @@ export function getDefaultCustomSelection(partSet: PartPackageSet): CustomPartSe
     headCostume3dId: head.costume3dId,
     hairCostume3dId: hair.costume3dId,
     headOptionalCostume3dId: null,
+    origin: "custom",
   };
 }
 
 export function listSelectableParts(
   partSet: PartPackageSet,
   characterId: number,
-  partType: RuntimePartType
+  partType: RuntimePartType,
+  options: { unit?: string | null; loadedOnly?: boolean } = {}
 ): PartRegistryEntry[] {
   return partSet.registry
     .filter((entry) => entry.characterId === characterId)
-    .filter((entry) => normalizeRuntimePartType(entry.partType) === partType)
+    .filter((entry) => options.unit === undefined || sameUnit(entry.unit, options.unit))
+    .filter((entry) => tryNormalizeRuntimePartType(entry.partType) === partType)
     .filter((entry) => entry.status !== "missing")
-    .filter((entry) => partSet.packages.has(entry.packagePath))
+    .filter((entry) => !options.loadedOnly || partSet.packages.has(entry.packagePath))
     .sort((left, right) => left.costume3dId - right.costume3dId);
 }
 
 export function composeRuntimeCombinedCharacterAsset(
   input: ComposePartAssetInput
 ): RuntimeCombinedCharacterAsset {
-  const { partSet, selection, activeCharacterId, resolveUrl } = input;
-  if (activeCharacterId !== null && selection.characterId !== activeCharacterId) {
+  const { partSet, selection, activeRoleId, resolveUrl } = input;
+  const selectionRoleId = runtimeRoleId(selection.characterId, selection.unit);
+  if (activeRoleId !== null && selectionRoleId !== activeRoleId) {
     throw new Error(
-      `Custom switching is limited to character ${activeCharacterId}. Reload the viewer package to switch to character ${selection.characterId}.`
+      `Custom switching is limited to role ${activeRoleId}. Reload/select another role before switching to ${selectionRoleId}.`
     );
   }
 
-  const body = requirePart(partSet, selection.characterId, "body", selection.bodyCostume3dId);
-  const head = requirePart(partSet, selection.characterId, "head", selection.headCostume3dId);
-  const hair = requirePart(partSet, selection.characterId, "hair", selection.hairCostume3dId);
+  const body = requirePart(partSet, selection.characterId, selection.unit, "body", selection.bodyCostume3dId);
+  const head = requirePart(partSet, selection.characterId, selection.unit, "head", selection.headCostume3dId);
+  const hair = requirePart(partSet, selection.characterId, selection.unit, "hair", selection.hairCostume3dId);
   const optional = selection.headOptionalCostume3dId
-    ? requirePart(partSet, selection.characterId, "head_optional", selection.headOptionalCostume3dId)
+    ? requirePart(partSet, selection.characterId, selection.unit, "head_optional", selection.headOptionalCostume3dId)
     : null;
 
-  assertSameCharacter(selection.characterId, [body, head, hair, optional].filter(Boolean) as PartRuntimePackage[]);
+  assertSameRole(selection.characterId, selection.unit, [body, head, hair, optional].filter(Boolean) as PartRuntimePackage[]);
   assertHeadHairCompatible(partSet.compatibility, selection);
 
   const bodyManifest = normalizeBodyManifestFromPart(body, resolveUrl);
@@ -217,10 +320,10 @@ export function composeRuntimeCombinedCharacterAsset(
   );
 
   return {
-    id: `custom-${selection.characterId}-${selection.bodyCostume3dId}-${selection.headCostume3dId}-${selection.hairCostume3dId}-${selection.headOptionalCostume3dId ?? "none"}`,
-    displayName: `Custom ${selection.characterId}`,
+    id: `custom-${selectionRoleId}-${selection.bodyCostume3dId}-${selection.headCostume3dId}-${selection.hairCostume3dId}-${selection.headOptionalCostume3dId ?? "none"}`,
+    displayName: `Custom ${selectionRoleId}`,
     meshUrl: "",
-    unityRuntimeJsonUrl: `haruki-composed://character-${selection.characterId}/unity-runtime.json`,
+    unityRuntimeJsonUrl: `haruki-composed://role-${selectionRoleId}/unity-runtime.json`,
     unityRuntimeJsonPath: "viewer-composed-part-runtime",
     bodyAsset: bodyManifest,
     headAsset: headManifest,
@@ -231,32 +334,36 @@ export function composeRuntimeCombinedCharacterAsset(
 function findFirstLoadedPart(
   partSet: PartPackageSet,
   partType: RuntimePartType,
-  characterId?: number
+  characterId?: number,
+  unit?: string | null
 ) {
   return partSet.registry.find((entry) =>
-    normalizeRuntimePartType(entry.partType) === partType &&
+    tryNormalizeRuntimePartType(entry.partType) === partType &&
     (characterId === undefined || entry.characterId === characterId) &&
+    (unit === undefined || sameUnit(entry.unit, unit)) &&
     entry.status !== "missing" &&
     partSet.packages.has(entry.packagePath)
   );
 }
 
-function findFirstCompatibleLoadedHeadHair(partSet: PartPackageSet, characterId: number) {
-  const heads = listSelectableParts(partSet, characterId, "head");
-  const hairs = listSelectableParts(partSet, characterId, "hair");
-  const deniedKeys = buildDeniedCompatibilityKeys(partSet.compatibility);
+function findFirstCompatibleLoadedHeadHair(partSet: PartPackageSet, characterId: number, unit: string | null) {
+  const heads = listSelectableParts(partSet, characterId, "head", { unit, loadedOnly: true });
+  const hairs = listSelectableParts(partSet, characterId, "hair", { unit, loadedOnly: true });
   for (const head of heads) {
     for (const hair of hairs) {
       const selection = {
         characterId,
-        unit: head.unit ?? hair.unit ?? null,
+        unit,
         bodyCostume3dId: 0,
         headCostume3dId: head.costume3dId,
         hairCostume3dId: hair.costume3dId,
         headOptionalCostume3dId: null,
       };
-      if (!deniedKeys.has(compatibilityKey(selection.unit, selection.headCostume3dId, selection.hairCostume3dId))) {
+      try {
+        assertHeadHairCompatible(partSet.compatibility, selection);
         return { head, hair };
+      } catch {
+        // Continue searching for a compatible default pair.
       }
     }
   }
@@ -266,10 +373,11 @@ function findFirstCompatibleLoadedHeadHair(partSet: PartPackageSet, characterId:
 function hasLoadedPart(
   partSet: PartPackageSet,
   characterId: number,
+  unit: string | null | undefined,
   partType: RuntimePartType,
   costume3dId: number
 ) {
-  return Boolean(findLoadedPart(partSet, characterId, partType, costume3dId));
+  return Boolean(findLoadedPart(partSet, characterId, unit, partType, costume3dId));
 }
 
 function hasCompletePresetParts(entry: Character3dIndexEntry): entry is Character3dIndexEntry & {
@@ -286,12 +394,13 @@ function hasCompletePresetParts(entry: Character3dIndexEntry): entry is Characte
 function requirePart(
   partSet: PartPackageSet,
   characterId: number,
+  unit: string | null | undefined,
   partType: RuntimePartType,
   costume3dId: number
 ): PartRuntimePackage {
-  const entry = findLoadedPart(partSet, characterId, partType, costume3dId);
+  const entry = findLoadedPart(partSet, characterId, unit, partType, costume3dId);
   if (!entry) {
-    throw new Error(`Missing loaded ${partType} package for character ${characterId}, costume3dId ${costume3dId}.`);
+    throw new Error(`Missing loaded ${partType} package for role ${runtimeRoleId(characterId, unit)}, costume3dId ${costume3dId}.`);
   }
   const runtime = partSet.packages.get(entry.packagePath);
   return runtime!;
@@ -300,24 +409,28 @@ function requirePart(
 function findLoadedPart(
   partSet: PartPackageSet,
   characterId: number,
+  unit: string | null | undefined,
   partType: RuntimePartType,
   costume3dId: number
 ) {
   return partSet.registry.find(
     (candidate) =>
       candidate.characterId === characterId &&
+      sameUnit(candidate.unit, unit) &&
       candidate.costume3dId === costume3dId &&
-      normalizeRuntimePartType(candidate.partType) === partType &&
+      tryNormalizeRuntimePartType(candidate.partType) === partType &&
       candidate.status !== "missing" &&
       partSet.packages.has(candidate.packagePath)
   );
 }
 
-function assertSameCharacter(characterId: number, packages: PartRuntimePackage[]) {
-  const mismatch = packages.find((runtime) => runtime.part.characterId !== characterId);
+function assertSameRole(characterId: number, unit: string | null | undefined, packages: PartRuntimePackage[]) {
+  const mismatch = packages.find((runtime) =>
+    runtime.part.characterId !== characterId || !sameUnit(runtime.part.unit, unit)
+  );
   if (mismatch) {
     throw new Error(
-      `Part ${mismatch.part.partType}/${mismatch.part.costume3dId} belongs to character ${mismatch.part.characterId}, not ${characterId}.`
+      `Part ${mismatch.part.partType}/${mismatch.part.costume3dId} belongs to role ${runtimeRoleId(mismatch.part.characterId, mismatch.part.unit)}, not ${runtimeRoleId(characterId, unit)}.`
     );
   }
 }
@@ -329,9 +442,17 @@ function assertHeadHairCompatible(
   if (!compatibility) {
     return;
   }
+  if (selection.origin === "official_preset") {
+    return;
+  }
   const key = compatibilityKey(selection.unit, selection.headCostume3dId, selection.hairCostume3dId);
-  if (buildDeniedCompatibilityKeys(compatibility).has(key)) {
+  const { availableKeys, deniedKeys, availableHeadKeys } = buildCompatibilityKeys(compatibility);
+  if (deniedKeys.has(key)) {
     throw new Error(`Head ${selection.headCostume3dId} and hair ${selection.hairCostume3dId} are not available together.`);
+  }
+  const availableHeadKey = compatibilityHeadKey(selection.unit, selection.headCostume3dId);
+  if (availableHeadKeys.has(availableHeadKey) && !availableKeys.has(key)) {
+    throw new Error(`Head ${selection.headCostume3dId} and hair ${selection.hairCostume3dId} are not in the available pattern list for unit ${selection.unit ?? ""}.`);
   }
 }
 
@@ -349,8 +470,35 @@ function buildDeniedCompatibilityKeys(compatibility: HeadHairCompatibility | nul
   );
 }
 
+function buildCompatibilityKeys(compatibility: HeadHairCompatibility) {
+  const availableKeys = new Set<string>();
+  const availableHeadKeys = new Set<string>();
+  const deniedKeys = buildDeniedCompatibilityKeys(compatibility);
+  const availableEntries = [
+    ...(compatibility.allowed ?? []),
+    ...(compatibility.rules ?? []).filter((entry) => entry.state === "available"),
+  ];
+  for (const entry of availableEntries) {
+    availableKeys.add(compatibilityKey(entry.unit, entry.headCostume3dId, entry.hairCostume3dId));
+    availableHeadKeys.add(compatibilityHeadKey(entry.unit, entry.headCostume3dId));
+  }
+  return { availableKeys, availableHeadKeys, deniedKeys };
+}
+
 function compatibilityKey(unit: string | null | undefined, headCostume3dId: number, hairCostume3dId: number) {
-  return `${unit ?? ""}|${headCostume3dId}|${hairCostume3dId}`;
+  return `${normalizeUnit(unit)}|${headCostume3dId}|${hairCostume3dId}`;
+}
+
+function compatibilityHeadKey(unit: string | null | undefined, headCostume3dId: number) {
+  return `${normalizeUnit(unit)}|${headCostume3dId}`;
+}
+
+function normalizeUnit(unit: string | null | undefined) {
+  return unit ?? "";
+}
+
+function sameUnit(left: string | null | undefined, right: string | null | undefined) {
+  return normalizeUnit(left) === normalizeUnit(right);
 }
 
 function normalizeBodyManifestFromPart(
@@ -474,21 +622,24 @@ function composeRuntimeExtension(
 }
 
 function mergeRuntimeSetup(runtimes: PartRuntimePackage[]): RuntimeSetup {
-  const firstSetup = getPartRuntimeSetup(runtimes[0]);
+  const remappedParts = runtimes.map((runtime, partIndex) => remapRuntimePart(runtime, partIndex));
+  const firstSetup = remappedParts[0]?.setup ?? {};
   const warnings = runtimes.flatMap((runtime) => [
     ...(runtime.warnings ?? []),
     ...((runtime.springBone?.warnings as string[] | undefined) ?? []),
   ]);
-  const activeRoots = uniqueStrings(
-    runtimes.flatMap((runtime) =>
-      readStringArray((runtime.springBone?.activeRootProfile as Record<string, unknown> | undefined)?.activeRoots)
-    )
-  );
+  const activeRoots = uniqueStrings(remappedParts.flatMap((part) => part.activeRoots));
+  const managers = remappedParts.flatMap((part) => part.managers);
+  const bones = remappedParts.flatMap((part) => part.bones);
+  const colliders = remappedParts.flatMap((part) => part.colliders);
+  const colliderBindings = rebuildColliderBindings(remappedParts);
+  const managerColliderCaches = rebuildManagerColliderCaches(remappedParts);
+  const bindingDecisions = rebuildBindingDecisions(bones, colliderBindings);
   return {
     ...firstSetup,
     version: "0414",
-    prefabGraphs: runtimes
-      .map((runtime) => runtime.springBone?.prefabGraph)
+    prefabGraphs: remappedParts
+      .map((part) => part.runtime.springBone?.prefabGraph)
       .filter((value) => value !== undefined),
     rootSelectionProfile: {
       policy: "viewer_composed_active_parts",
@@ -501,23 +652,23 @@ function mergeRuntimeSetup(runtimes: PartRuntimePackage[]): RuntimeSetup {
         "load active part packages",
         "merge part native meshes",
         "merge active part springbone records",
+        "rebind colliderFlag springs to current body colliders",
         "reset spring runtime",
       ],
+      directBindingCount: colliderBindings.filter((binding) => binding.sourceKind === "direct").length,
+      colliderFlagBindingCount: colliderBindings.filter((binding) => binding.sourceKind === "colliderFlag").length,
     },
     activeRootProfile: {
       defaultBodyRoot: activeRoots[0] ?? "body",
       activeRoots: activeRoots.length ? activeRoots : ["body", "face"],
       inactiveRoots: [],
     },
-    managers: remapPathIds(runtimes, "managers"),
-    bones: remapPathIds(runtimes, "bones"),
-    colliders: remapColliderIndexes(runtimes),
-    colliderBindings: runtimes.flatMap((runtime, index) =>
-      cloneArrayWithPartPrefix(runtime.springBone?.colliderBindings, index)
-    ),
-    managerColliderCaches: runtimes.flatMap((runtime, index) =>
-      cloneArrayWithPartPrefix(runtime.springBone?.managerColliderCaches, index)
-    ),
+    managers,
+    bones,
+    colliders,
+    colliderBindings,
+    bindingDecisions,
+    managerColliderCaches,
     warnings,
   };
 }
@@ -525,38 +676,34 @@ function mergeRuntimeSetup(runtimes: PartRuntimePackage[]): RuntimeSetup {
 function getPartRuntimeSetup(runtime: PartRuntimePackage): RuntimeSetup {
   const springBone = runtime.springBone ?? {};
   return {
-    managers: springBone.managers as unknown[] | undefined,
-    bones: springBone.bones as unknown[] | undefined,
-    colliders: springBone.colliders as unknown[] | undefined,
-    colliderBindings: springBone.colliderBindings as unknown[] | undefined,
-    managerColliderCaches: springBone.managerColliderCaches as unknown[] | undefined,
+    managers: springBone.managers as RuntimeManager[] | undefined,
+    bones: springBone.bones as RuntimeBone[] | undefined,
+    colliders: springBone.colliders as RuntimeCollider[] | undefined,
+    colliderBindings: springBone.colliderBindings as RuntimeColliderBinding[] | undefined,
+    managerColliderCaches: springBone.managerColliderCaches as RuntimeManagerColliderCache[] | undefined,
     activeRootProfile: springBone.activeRootProfile as Record<string, unknown> | undefined,
+    bindingDecisions: springBone.bindingDecisions as RuntimeBindingDecision[] | undefined,
   };
 }
 
-function remapPathIds(runtimes: PartRuntimePackage[], field: "managers" | "bones") {
-  return runtimes.flatMap((runtime, partIndex) =>
-    cloneArrayWithPartPrefix(runtime.springBone?.[field], partIndex).map((entry) => {
-      if (isRecord(entry) && typeof entry.pathId === "number") {
-        return { ...entry, pathId: remapNumericId(entry.pathId, partIndex) };
-      }
-      return entry;
-    })
-  );
+function remapRuntimePart(runtime: PartRuntimePackage, partIndex: number): RemappedRuntimePart {
+  const setup = getPartRuntimeSetup(runtime);
+  const partType = normalizeRuntimePartType(runtime.part.partType);
+  return {
+    runtime,
+    partIndex,
+    partType,
+    setup,
+    managers: cloneArrayWithPartPrefix(setup.managers, partIndex) as RuntimeManager[],
+    bones: cloneArrayWithPartPrefix(setup.bones, partIndex) as RuntimeBone[],
+    colliders: cloneArrayWithPartPrefix(setup.colliders, partIndex) as RuntimeCollider[],
+    colliderBindings: cloneArrayWithPartPrefix(setup.colliderBindings, partIndex) as RuntimeColliderBinding[],
+    managerColliderCaches: cloneArrayWithPartPrefix(setup.managerColliderCaches, partIndex) as RuntimeManagerColliderCache[],
+    activeRoots: readStringArray(setup.activeRootProfile?.activeRoots),
+  };
 }
 
-function remapColliderIndexes(runtimes: PartRuntimePackage[]) {
-  return runtimes.flatMap((runtime, partIndex) =>
-    cloneArrayWithPartPrefix(runtime.springBone?.colliders, partIndex).map((entry) => {
-      if (isRecord(entry) && typeof entry.index === "number") {
-        return { ...entry, index: remapNumericId(entry.index, partIndex) };
-      }
-      return entry;
-    })
-  );
-}
-
-function cloneArrayWithPartPrefix(value: unknown, partIndex: number): unknown[] {
+function cloneArrayWithPartPrefix<T = unknown>(value: unknown, partIndex: number): T[] {
   if (!Array.isArray(value)) {
     return [];
   }
@@ -568,20 +715,215 @@ function cloneArrayWithPartPrefix(value: unknown, partIndex: number): unknown[] 
     if (typeof cloned.pathId === "number") {
       cloned.pathId = remapNumericId(cloned.pathId, partIndex);
     }
+    if (typeof cloned.index === "number") {
+      cloned.index = remapNumericId(cloned.index, partIndex);
+    }
+    if (typeof cloned.managerPathId === "number") {
+      cloned.managerPathId = remapNumericId(cloned.managerPathId, partIndex);
+    }
+    if (typeof cloned.pivotSourcePathId === "number") {
+      cloned.pivotSourcePathId = remapNumericId(cloned.pivotSourcePathId, partIndex);
+    }
     if (typeof cloned.sourceSpringBonePathId === "number") {
       cloned.sourceSpringBonePathId = remapNumericId(cloned.sourceSpringBonePathId, partIndex);
+    }
+    if (Array.isArray(cloned.bonePathIds)) {
+      cloned.bonePathIds = cloned.bonePathIds.map((id) =>
+        typeof id === "number" ? remapNumericId(id, partIndex) : id
+      );
+    }
+    if (Array.isArray(cloned.directColliderPathIds)) {
+      cloned.directColliderPathIds = cloned.directColliderPathIds.map((id) =>
+        typeof id === "number" ? remapNumericId(id, partIndex) : id
+      );
     }
     if (Array.isArray(cloned.sourceColliderPathIds)) {
       cloned.sourceColliderPathIds = cloned.sourceColliderPathIds.map((id) =>
         typeof id === "number" ? remapNumericId(id, partIndex) : id
       );
     }
-    return cloned;
+    if (Array.isArray(cloned.colliders)) {
+      cloned.colliders = cloned.colliders.map((id) =>
+        typeof id === "number" ? remapNumericId(id, partIndex) : id
+      );
+    }
+    if (Array.isArray(cloned.selectedColliderIndexes)) {
+      cloned.selectedColliderIndexes = cloned.selectedColliderIndexes.map((id) =>
+        typeof id === "number" ? remapNumericId(id, partIndex) : id
+      );
+    }
+    if (Array.isArray(cloned.sphereColliderIndexes)) {
+      cloned.sphereColliderIndexes = cloned.sphereColliderIndexes.map((id) =>
+        typeof id === "number" ? remapNumericId(id, partIndex) : id
+      );
+    }
+    if (Array.isArray(cloned.capsuleColliderIndexes)) {
+      cloned.capsuleColliderIndexes = cloned.capsuleColliderIndexes.map((id) =>
+        typeof id === "number" ? remapNumericId(id, partIndex) : id
+      );
+    }
+    if (Array.isArray(cloned.panelColliderIndexes)) {
+      cloned.panelColliderIndexes = cloned.panelColliderIndexes.map((id) =>
+        typeof id === "number" ? remapNumericId(id, partIndex) : id
+      );
+    }
+    if (Array.isArray(cloned.springBonePathIds)) {
+      cloned.springBonePathIds = cloned.springBonePathIds.map((id) =>
+        typeof id === "number" ? remapNumericId(id, partIndex) : id
+      );
+    }
+    if (isRecord(cloned.collidersByRoot)) {
+      cloned.collidersByRoot = remapColliderRoots(cloned.collidersByRoot, partIndex);
+    }
+    if (isRecord(cloned.candidateRoots)) {
+      cloned.candidateRoots = remapColliderRoots(cloned.candidateRoots, partIndex);
+    }
+    return cloned as T;
   });
 }
 
 function remapNumericId(value: number, partIndex: number) {
   return (partIndex + 1) * 1_000_000_000 + value;
+}
+
+function remapColliderRoots(value: Record<string, unknown>, partIndex: number): Record<string, number[]> {
+  return Object.fromEntries(
+    Object.entries(value).map(([root, indexes]) => [
+      root,
+      Array.isArray(indexes)
+        ? indexes.map((id) => typeof id === "number" ? remapNumericId(id, partIndex) : id)
+            .filter((id): id is number => typeof id === "number")
+        : [],
+    ])
+  );
+}
+
+function rebuildColliderBindings(parts: RemappedRuntimePart[]): RuntimeColliderBinding[] {
+  const bodyColliders = parts
+    .filter((part) => part.partType === "body")
+    .flatMap((part) => part.colliders);
+  const currentBodyRoots = collidersByRoot(bodyColliders);
+  return parts.flatMap((part) =>
+    part.colliderBindings.map((binding) => {
+      if (binding.sourceKind !== "colliderFlag" || part.partType === "body" || !hasColliderRoots(currentBodyRoots)) {
+        return binding;
+      }
+      const selected = firstColliderRoot(currentBodyRoots);
+      return {
+        ...binding,
+        collidersByRoot: currentBodyRoots,
+        defaultRoot: selected.root,
+        colliders: selected.indexes,
+        sourceColliderPathIds: selected.indexes
+          .map((index) => bodyColliders.find((collider) => collider.index === index)?.pathId)
+          .filter((pathId): pathId is number => typeof pathId === "number"),
+        rebindReason: "viewer_composed_current_body_colliders",
+      };
+    })
+  );
+}
+
+function rebuildBindingDecisions(
+  bones: RuntimeBone[],
+  bindings: RuntimeColliderBinding[]
+): RuntimeBindingDecision[] {
+  const boneByPathId = new Map(
+    bones
+      .filter((bone) => typeof bone.pathId === "number")
+      .map((bone) => [bone.pathId as number, bone])
+  );
+  return bindings
+    .filter((binding) => typeof binding.sourceSpringBonePathId === "number")
+    .map((binding) => {
+      const bone = boneByPathId.get(binding.sourceSpringBonePathId!);
+      const candidateRoots = hasColliderRoots(binding.collidersByRoot)
+        ? binding.collidersByRoot!
+        : {
+            [binding.defaultRoot ?? bone?.poseRoot ?? "unknown"]: binding.colliders ?? [],
+          };
+      return {
+        sourceKind: binding.sourceKind ?? "direct",
+        partKind: binding.partKind ?? bone?.partKind ?? "Unknown",
+        sourceSpringBonePathId: binding.sourceSpringBonePathId,
+        nodePath: bone?.nodePath ?? null,
+        poseRoot: bone?.poseRoot ?? null,
+        colliderFlag: typeof binding.colliderFlag === "number" ? binding.colliderFlag : null,
+        directColliderPathIds: binding.sourceKind === "direct" ? binding.sourceColliderPathIds ?? [] : [],
+        candidateRoots,
+        defaultRoot: binding.defaultRoot ?? null,
+        selectedColliderIndexes: binding.colliders ?? [],
+        reason: binding.sourceKind === "colliderFlag"
+          ? "viewer custom composer rebound colliderFlag candidates to current body colliders"
+          : "direct serialized collider references",
+      };
+    });
+}
+
+function rebuildManagerColliderCaches(parts: RemappedRuntimePart[]): RuntimeManagerColliderCache[] {
+  const colliderByIndex = new Map(
+    parts
+      .flatMap((part) => part.colliders)
+      .filter((collider) => typeof collider.index === "number")
+      .map((collider) => [collider.index as number, collider])
+  );
+  return parts.flatMap((part) =>
+    part.managerColliderCaches.map((cache) => filterManagerCache(cache, colliderByIndex))
+  );
+}
+
+function filterManagerCache(
+  cache: RuntimeManagerColliderCache,
+  colliderByIndex: ReadonlyMap<number, RuntimeCollider>
+): RuntimeManagerColliderCache {
+  return {
+    ...cache,
+    sphereColliderIndexes: readNumberArray(cache.sphereColliderIndexes)
+      .filter((index) => colliderByIndex.has(index)),
+    capsuleColliderIndexes: readNumberArray(cache.capsuleColliderIndexes)
+      .filter((index) => colliderByIndex.has(index)),
+    panelColliderIndexes: readNumberArray(cache.panelColliderIndexes)
+      .filter((index) => colliderByIndex.has(index)),
+    reason: "viewer_composed_active_parts_manager_cache",
+  };
+}
+
+function collidersByRoot(colliders: RuntimeCollider[]): Record<string, number[]> {
+  const roots = new Map<string, number[]>();
+  for (const collider of colliders) {
+    if (typeof collider.index !== "number") {
+      continue;
+    }
+    const root = normalizeRootName(firstPathSegment(collider.nodePath) ?? collider.poseRoot ?? "body");
+    const indexes = roots.get(root) ?? [];
+    indexes.push(collider.index);
+    roots.set(root, indexes);
+  }
+  return Object.fromEntries(
+    [...roots.entries()].map(([root, indexes]) => [root, [...new Set(indexes)].sort((a, b) => a - b)])
+  );
+}
+
+function hasColliderRoots(value: Record<string, number[]> | null | undefined): value is Record<string, number[]> {
+  return Boolean(value && Object.values(value).some((indexes) => indexes.length > 0));
+}
+
+function firstColliderRoot(value: Record<string, number[]>): { root: string; indexes: number[] } {
+  const [root, indexes] = Object.entries(value)
+    .sort(([left], [right]) => rootPriority(left) - rootPriority(right) || left.localeCompare(right))[0];
+  return { root, indexes };
+}
+
+function rootPriority(root: string): number {
+  return root === "body" ? 0 : root === "sit_body" ? 1 : root === "guitar_body" ? 2 : 10;
+}
+
+function normalizeRootName(value: string | null | undefined): string {
+  return (value ?? "").trim() || "body";
+}
+
+function firstPathSegment(value: string | null | undefined): string | null {
+  const segment = value?.split("/").find(Boolean);
+  return segment ?? null;
 }
 
 function mergeNativeMeshes(runtimes: PartRuntimePackage[]) {
@@ -624,6 +966,12 @@ function readStringArray(value: unknown): string[] {
 function readRecordArray(value: unknown): Record<string, unknown>[] {
   return Array.isArray(value)
     ? value.filter((entry): entry is Record<string, unknown> => isRecord(entry))
+    : [];
+}
+
+function readNumberArray(value: unknown): number[] {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is number => typeof entry === "number")
     : [];
 }
 

@@ -1,4 +1,4 @@
-import type { HairShadowMode, MaterialBindingMode } from "../engine/PjskViewerApp";
+import type { HairShadowMode, MaterialBindingMode } from "../engine/Haruki3DEngine";
 
 export type ToonShadowSmoothMode =
   | "auto"
@@ -11,7 +11,7 @@ export type ValueShadowInfluenceMode = "0" | "0.25" | "0.5" | "1";
 export type CharacterYawMode = "0" | "45" | "-45" | "90" | "-90" | "180";
 export type SpringRuntimeMode = "off" | "unity-prefab";
 
-export type ViewerRenderState = {
+export type EngineRenderState = {
   materialBindingMode: MaterialBindingMode;
   hairShadowMode: HairShadowMode;
   toonShadowSmoothMode: ToonShadowSmoothMode;
@@ -22,13 +22,16 @@ export type ViewerRenderState = {
   springRuntimeMode: SpringRuntimeMode;
 };
 
-export type ViewerAnimationState = {
+export type EngineAnimationState = {
   selectedMotionUrl: string;
   selectedLoopUrl: string;
   speed: number;
   paused: boolean;
   seekTime: number;
 };
+
+export type ViewerRenderState = EngineRenderState;
+export type ViewerAnimationState = EngineAnimationState;
 
 export const toonShadowSmoothByMode: Record<ToonShadowSmoothMode, number | null> = {
   auto: null,
@@ -55,7 +58,7 @@ export const characterYawDegreesByMode: Record<CharacterYawMode, number> = {
   "180": 180,
 };
 
-export const defaultRenderState: ViewerRenderState = {
+export const defaultRenderState: EngineRenderState = {
   materialBindingMode: "manifest",
   hairShadowMode: "light",
   toonShadowSmoothMode: "auto",
@@ -66,7 +69,7 @@ export const defaultRenderState: ViewerRenderState = {
   springRuntimeMode: "unity-prefab",
 };
 
-export const defaultAnimationState: ViewerAnimationState = {
+export const defaultAnimationState: EngineAnimationState = {
   selectedMotionUrl: "",
   selectedLoopUrl: "",
   speed: 1,

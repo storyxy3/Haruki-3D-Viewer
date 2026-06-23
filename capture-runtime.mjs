@@ -35,6 +35,7 @@ function parseArgs(argv) {
     clip: "motion_loop",
     width: 1400,
     height: 1000,
+    scale: 1,
     timeoutMs: 45000,
     warmupMs: 0,
     warmupFrames: 0,
@@ -77,6 +78,8 @@ function parseArgs(argv) {
       options.width = Number(readValue());
     } else if (arg === "--height") {
       options.height = Number(readValue());
+    } else if (arg === "--scale" || arg === "--device-scale-factor") {
+      options.scale = Number(readValue());
     } else if (arg === "--timeout-ms") {
       options.timeoutMs = Number(readValue());
     } else if (arg === "--warmup-ms") {
@@ -152,6 +155,7 @@ function parseArgs(argv) {
   }
   options.width = Math.max(Math.trunc(options.width) || 1400, 320);
   options.height = Math.max(Math.trunc(options.height) || 1000, 320);
+  options.scale = Math.min(Math.max(Number(options.scale) || 1, 1), 2);
   options.timeoutMs = Math.max(Math.trunc(options.timeoutMs) || 45000, 5000);
   options.warmupMs = Math.max(Math.trunc(options.warmupMs) || 0, 0);
   options.warmupFrames = Math.max(Math.trunc(options.warmupFrames) || 0, 0);
@@ -203,6 +207,7 @@ Options:
   --clip <name>        Clip to capture: motion or motion_loop. Default: motion_loop
   --width <px>         Browser viewport width. Default: 1400
   --height <px>        Browser viewport height. Default: 1000
+  --scale <n>          Output pixel scale / DPR, 1..2. Default: 1
   --timeout-ms <ms>    Capture-ready timeout. Default: 45000
   --warmup-ms <ms>     Let animation/runtime play before capture. Default: 0
   --warmup-frames <n>  Deterministically step n frames at 60fps instead of real-time warmup
@@ -236,7 +241,7 @@ function assertConverterPackage(inputDir) {
 }
 
 function maybeBuildDist(shouldBuild) {
-  if (!shouldBuild && fs.existsSync(path.join(distDir, "index.html"))) {
+  if (!shouldBuild && fs.existsSync(path.join(distDir, "capture.html"))) {
     return;
   }
   const result = spawnSync("npm", ["run", "build"], {
@@ -300,10 +305,10 @@ function startStaticServer(inputDir) {
       }
 
       const relativePath =
-        requestUrl.pathname === "/" ? "index.html" : requestUrl.pathname;
+        requestUrl.pathname === "/" ? "capture.html" : requestUrl.pathname;
       const filePath = safeJoin(distDir, relativePath) ??
-        path.join(distDir, "index.html");
-      serveFile(fs.existsSync(filePath) ? filePath : path.join(distDir, "index.html"), req, res);
+        path.join(distDir, "capture.html");
+      serveFile(fs.existsSync(filePath) ? filePath : path.join(distDir, "capture.html"), req, res);
     } catch (error) {
       res.writeHead(500, { "content-type": "text/plain; charset=utf-8" });
       res.end(error instanceof Error ? error.message : String(error));
@@ -590,7 +595,7 @@ async function waitForCaptureReady(client, timeoutMs) {
     }
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
-  throw new Error("Timed out waiting for viewer captureReady.");
+  throw new Error("Timed out waiting for capture harness readiness.");
 }
 
 async function capture(options) {
@@ -611,7 +616,7 @@ async function capture(options) {
   const { server, port } = await startStaticServer(options.input);
   const debugPort = await getFreePort();
   const pageUrl =
-    `http://127.0.0.1:${port}/?captureBase=/capture-input/&capturePhase=${options.phase}` +
+    `http://127.0.0.1:${port}/capture.html?captureBase=/capture-input/&capturePhase=${options.phase}` +
     `&captureClip=${encodeURIComponent(options.clip)}` +
     `&captureWarmupMs=${options.warmupMs}` +
     `&captureWarmupFrames=${options.warmupFrames}` +
@@ -658,7 +663,7 @@ async function capture(options) {
     await client.send("Emulation.setDeviceMetricsOverride", {
       width: options.width,
       height: options.height,
-      deviceScaleFactor: 1,
+      deviceScaleFactor: options.scale,
       mobile: false,
     });
     await client.send("Page.navigate", { url: pageUrl });
@@ -688,6 +693,7 @@ async function capture(options) {
       renderIsolation: options.renderIsolation,
       width: options.width,
       height: options.height,
+      scale: options.scale,
       snapshot,
     }, null, 2));
   } catch (error) {

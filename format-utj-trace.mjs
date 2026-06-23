@@ -145,7 +145,7 @@ function buildReport(trace, event, collider) {
   ];
 
   lines.push(...section("1. UpdateSpring Inputs"));
-  lines.push(row(["IDA / F5 place", "Viewer trace field", "Value"]));
+  lines.push(row(["IDA / F5 place", "Engine trace field", "Value"]));
   lines.push(row(["---", "---", "---"]));
   lines.push(row(["UTJ_SpringBone__UpdateSpring deltaTime", "deltaTime", fmtNumber(event.deltaTime)]));
   lines.push(row(["localTransform.position / cachedPosition", "headPosition", fmtVec(event.headPosition)]));
@@ -159,7 +159,7 @@ function buildReport(trace, event, collider) {
   lines.push(row(["computed animated tip", "animatedTip", fmtVec(event.animatedTip)]));
 
   lines.push(...section("2. Stage State"));
-  lines.push(row(["Stage", "IDA value to compare", "Viewer value"]));
+  lines.push(row(["Stage", "IDA value to compare", "Engine value"]));
   lines.push(row(["---", "---", "---"]));
   lines.push(...stateRows("before UpdateSpring", event.stateBefore, "springBone->fields"));
   lines.push(...stateRows("after cache position", event.stateAfterCache, "after cache"));
@@ -174,7 +174,7 @@ function buildReport(trace, event, collider) {
     lines.push("No collider checks were recorded for this event.");
   } else {
     lines.push(`Chosen collider: ${collider.name ?? "-"} (${collider.path ?? "-"})`);
-    lines.push(row(["IDA / F5 place", "Viewer trace field", "Value"]));
+    lines.push(row(["IDA / F5 place", "Engine trace field", "Value"]));
     lines.push(row(["---", "---", "---"]));
     lines.push(row(["CheckForCollisionAndReact return", "status", String(collider.status)]));
     lines.push(row(["tailPosition before call", "beforeTailPosition", fmtVec(collider.beforeTailPosition)]));
@@ -192,7 +192,7 @@ function buildReport(trace, event, collider) {
 
   const angle = event.angleLimit ?? {};
   lines.push(...section("4. Angle Limit Detail"));
-  lines.push(row(["IDA / F5 place", "Viewer trace field", "Value"]));
+  lines.push(row(["IDA / F5 place", "Engine trace field", "Value"]));
   lines.push(row(["---", "---", "---"]));
   lines.push(row(["pivot transform", "pivotPath", angle.pivotPath ?? "-"]));
   lines.push(row(["angle vector before", "vectorBefore", fmtVec(angle.vectorBefore)]));

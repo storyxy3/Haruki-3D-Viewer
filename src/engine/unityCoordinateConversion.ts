@@ -1,32 +1,32 @@
 import * as THREE from "three";
 
 /**
- * Coordinate contract for this viewer.
+ * Coordinate contract for this engine.
  *
- * Unity-authored data enters the viewer through a single mirror:
+ * Unity-authored data enters the engine through a single mirror:
  *
  *   Unity / F5 / prefab local or world vector:  ( x, y, z )
- *   Viewer / Three vector after import:        ( -x, y, z )
+ *   Engine / Three vector after import:        ( -x, y, z )
  *
  * Quaternions are mirrored by the matching basis change:
  *
  *   Unity quaternion:  ( x, y, z, w )
- *   Viewer quaternion: ( x, -y, -z, w )
+ *   Engine quaternion: ( x, -y, -z, w )
  *
  * Rules that keep the runtime sane:
  *
  * 1. Convert serialized Unity positions, directions, and rotations exactly once
  *    at the import boundary.
- * 2. After a Transform/Object3D exists in the viewer scene, all runtime math is
- *    viewer-space math. Do not convert live Three world/local positions again.
+ * 2. After a Transform/Object3D exists in the engine scene, all runtime math is
+ *    engine-space math. Do not convert live Three world/local positions again.
  * 3. When IDA/F5 names a Unity basis vector, such as QuaternionUtility.Left,
  *    convert that named Unity axis with convertUnityAxisToThree before using it
  *    with a Three matrix/quaternion.
  * 4. Never paste raw Unity basis literals like (-1, 0, 0) into runtime code
  *    unless the code is still explicitly operating in unconverted Unity space.
  *
- * The trap: Unity "Left" is local -X, but in this viewer local -X is mirrored,
- * so Unity Left becomes viewer +X. Hardcoding Three (-1, 0, 0) for an F5
+ * The trap: Unity "Left" is local -X, but in this engine local -X is mirrored,
+ * so Unity Left becomes engine +X. Hardcoding Three (-1, 0, 0) for an F5
  * "Left" silently flips SpringBone angle limits and makes whole cloth/hair
  * groups bend outward.
  */

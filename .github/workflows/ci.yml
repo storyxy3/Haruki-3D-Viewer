@@ -31,5 +31,5 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build viewer
+      - name: Build engine
         run: npm run build

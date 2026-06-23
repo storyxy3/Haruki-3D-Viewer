@@ -1,6 +1,11 @@
 import * as THREE from "three";
 import type { VRM, VRMSpringBoneManager } from "@pixiv/three-vrm";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import {
+  loadRuntimePackageFromBaseUrl,
+  type RuntimePackageLoadOptions,
+  type RuntimePackageLoadResult,
+} from "../runtime/runtimePackageLoader";
 import type {
   BodyAssetManifest,
   CharacterAssemblyState,
@@ -36,6 +41,11 @@ import {
   readUnityVector3,
 } from "./unityCoordinateConversion";
 import type { SpringRuntimeMode } from "../config/viewerConfig";
+import type {
+  CustomPartSelection,
+  RuntimePartType,
+} from "../parts/runtimePartComposer";
+import { runtimeRoleId } from "../parts/runtimePartComposer";
 
 const NECK_CONTACT_SHADOW_STRENGTH = 0.0;
 const DEFAULT_CAMERA_TARGET_SCALE = new THREE.Vector3(0.04835, 0.48222, 0.07241);
@@ -73,6 +83,51 @@ const EYEBROW_THROUGH_HAIR_ALPHA = 0.55;
 const FACE_SHADOW_HORIZONTAL_EPSILON = 0.00001;
 
 type SpringRuntimeController = UnityPrefabSpringRuntime;
+
+export type PjskPresentationMode = "interactive" | "capture";
+export type PjskCameraPreset = "default" | "id5-debug";
+
+export type PjskEngineOptions = {
+  container: HTMLElement;
+  initialLight: PreviewLightState;
+  presentationMode?: PjskPresentationMode;
+  cameraPreset?: PjskCameraPreset;
+  autoRender?: boolean;
+  manageResize?: boolean;
+};
+
+export type PjskViewerEngineOptions = PjskEngineOptions;
+export type Haruki3DEngineOptions = PjskEngineOptions;
+
+export type HarukiRuntimePackageRequest = RuntimePackageLoadOptions & {
+  baseUrl: string;
+  applyDefaultAnimation?: boolean;
+  applyFaceMotion?: boolean;
+};
+
+export type HarukiCaptureRolePartsRequest = {
+  roleId: string;
+  bodyCostume3dId: number;
+  headCostume3dId: number;
+  hairCostume3dId: number;
+  headOptionalCostume3dId?: number | null;
+  imageId?: string;
+  phase?: number;
+};
+
+export type HarukiCaptureRolePartsResult = {
+  selection: CustomPartSelection;
+  combinedCharacter: RuntimeCombinedCharacterAsset;
+  snapshots: HarukiEngineSnapshots;
+};
+
+export type HarukiEngineSnapshots = {
+  animation: AnimationPlaybackSnapshot;
+  faceMotion: FaceMotionPlaybackSnapshot;
+  springBone: SpringBoneRuntimeSnapshot;
+  camera: RuntimeCameraDebug;
+  runtimeDebug: RuntimeDebugSnapshot;
+};
 
 export type PartImportMode = "glb" | "proxy";
 export type RuntimePartImportMode = PartImportMode | "unity-runtime";
@@ -164,6 +219,18 @@ export type BodyAnimationSelection = {
   motionKind?: BodyAnimationKind | null;
   loopUrl: string | null;
   loopKind?: BodyAnimationKind | null;
+};
+
+type AnimationPlaybackRestoreState = {
+  selection: BodyAnimationSelection;
+  activeTime: number;
+  activeDuration: number;
+  activeWasLoop: boolean;
+  paused: boolean;
+  speed: number;
+  faceMotionTime: number;
+  faceMotionEnabled: boolean;
+  capturedAtMs: number;
 };
 
 export type RuntimeMaterialDebug = {
@@ -3055,6 +3122,18 @@ function vectorDebugSnapshot(vector: THREE.Vector3) {
   };
 }
 
+function parseRuntimeRoleId(roleId: string): { characterId: number; unit: string | null } {
+  const [rawCharacterId, ...unitParts] = roleId.split(":");
+  const characterId = Number(rawCharacterId);
+  if (!Number.isInteger(characterId) || characterId <= 0) {
+    throw new Error(`Invalid roleId ${roleId}: expected "<characterId>:<unit>".`);
+  }
+  const unit = unitParts.length > 0
+    ? unitParts.join(":").trim() || null
+    : null;
+  return { characterId, unit };
+}
+
 function debugNodeWorldDistance(
   first: PrefabHeadFollowNodeDebug | null,
   second: PrefabHeadFollowNodeDebug | null
@@ -3254,12 +3333,14 @@ function retargetUnityPrefabAnimationClip(
   };
 }
 
-export class PjskViewerApp {
+export class Haruki3DEngine {
   private readonly container: HTMLElement;
   private readonly scene: THREE.Scene;
   private readonly camera: THREE.PerspectiveCamera;
   private readonly renderer: THREE.WebGLRenderer;
   private readonly controls: OrbitControls;
+  private readonly autoRender: boolean;
+  private readonly manageResize: boolean;
   private readonly clock = new THREE.Clock();
   private readonly directionalLight: THREE.DirectionalLight;
   private readonly fillLight: THREE.AmbientLight;
@@ -3362,6 +3443,7 @@ export class PjskViewerApp {
   private faceSdfDebugLightMode: FaceSdfDebugLightMode = "scene";
   private renderIsolationMode: RenderIsolationMode = "normal";
   private cameraDebugChangeCallback: (() => void) | null = null;
+  private currentLoadedRuntimePackage: RuntimePackageLoadResult | null = null;
   private readonly runtimeDebug: RuntimeDebugSnapshot = {
     materialBindingMode: "manifest",
     body: [],
@@ -3371,16 +3453,30 @@ export class PjskViewerApp {
     outlineShells: [],
   };
 
-  constructor(container: HTMLElement, initialLight: PreviewLightState) {
-    this.container = container;
+  constructor(
+    containerOrOptions: HTMLElement | PjskEngineOptions,
+    initialLight?: PreviewLightState
+  ) {
+    const options =
+      containerOrOptions instanceof HTMLElement
+        ? { container: containerOrOptions, initialLight: initialLight! }
+        : containerOrOptions;
+    if (!options.initialLight) {
+      throw new Error("Missing initial light state for Haruki 3D engine.");
+    }
+    const light = options.initialLight;
+    this.container = options.container;
+    this.autoRender = options.autoRender ?? true;
+    this.manageResize = options.manageResize ?? true;
+
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color("#7f8d95");
     this.scene.fog = new THREE.Fog("#7f8d95", 5.5, 15);
 
-    const width = Math.max(container.clientWidth, 320);
-    const height = Math.max(container.clientHeight, 320);
+    const width = Math.max(this.container.clientWidth, 320);
+    const height = Math.max(this.container.clientHeight, 320);
     this.camera = new THREE.PerspectiveCamera(35, width / height, 0.1, 100);
-    this.camera.position.copy(getDefaultCameraPosition(initialLight.characterHeight));
+    this.camera.position.copy(getDefaultCameraPosition(light.characterHeight));
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true, stencil: true });
     this.renderer.autoClearStencil = true;
@@ -3394,7 +3490,7 @@ export class PjskViewerApp {
     this.controls.enableDamping = true;
     this.controls.minPolarAngle = THREE.MathUtils.degToRad(82);
     this.controls.maxPolarAngle = THREE.MathUtils.degToRad(100);
-    this.controls.target.copy(getDefaultCameraTarget(initialLight.characterHeight));
+    this.controls.target.copy(getDefaultCameraTarget(light.characterHeight));
     this.controls.addEventListener("change", () => {
       this.cameraDebugChangeCallback?.();
     });
@@ -3402,16 +3498,16 @@ export class PjskViewerApp {
 
     this.directionalLight = new THREE.DirectionalLight(
       "#fffaf2",
-      initialLight.intensity
+      light.intensity
     );
     this.directionalLight.position.set(
-      initialLight.x,
-      initialLight.y,
-      initialLight.z
+      light.x,
+      light.y,
+      light.z
     );
     this.scene.add(this.directionalLight);
 
-    this.fillLight = new THREE.AmbientLight("#fff8f0", initialLight.ambient);
+    this.fillLight = new THREE.AmbientLight("#fff8f0", light.ambient);
     this.scene.add(this.fillLight);
     this.textureLoader = new THREE.TextureLoader();
 
@@ -3419,14 +3515,14 @@ export class PjskViewerApp {
       baseColor: "#f5d6d0",
       shadowColor: "#c79b95",
       lightDirection: this.directionalLight.position.clone(),
-      lightIntensity: initialLight.intensity,
-      ambientIntensity: initialLight.ambient,
-      shadowThreshold: initialLight.shadowThreshold,
-      shadowWeight: initialLight.shadowWeight,
-      characterAmbientIntensity: initialLight.characterAmbient,
-      rimIntensity: initialLight.rimIntensity,
-      controllerRimThreshold: initialLight.rimThreshold,
-      rimDirectionality: initialLight.rimDirectionality,
+      lightIntensity: light.intensity,
+      ambientIntensity: light.ambient,
+      shadowThreshold: light.shadowThreshold,
+      shadowWeight: light.shadowWeight,
+      characterAmbientIntensity: light.characterAmbient,
+      rimIntensity: light.rimIntensity,
+      controllerRimThreshold: light.rimThreshold,
+      rimDirectionality: light.rimDirectionality,
       rimDirection: getSekaiPreviewRimDirection(),
       skinTintEnabled: true,
     });
@@ -3434,14 +3530,14 @@ export class PjskViewerApp {
       baseColor: "#7b5b4a",
       shadowColor: "#513d33",
       lightDirection: this.directionalLight.position.clone(),
-      lightIntensity: initialLight.intensity,
-      ambientIntensity: initialLight.ambient,
-      shadowThreshold: initialLight.shadowThreshold,
-      shadowWeight: initialLight.shadowWeight,
-      characterAmbientIntensity: initialLight.characterAmbient,
-      rimIntensity: initialLight.rimIntensity,
-      controllerRimThreshold: initialLight.rimThreshold,
-      rimDirectionality: initialLight.rimDirectionality,
+      lightIntensity: light.intensity,
+      ambientIntensity: light.ambient,
+      shadowThreshold: light.shadowThreshold,
+      shadowWeight: light.shadowWeight,
+      characterAmbientIntensity: light.characterAmbient,
+      rimIntensity: light.rimIntensity,
+      controllerRimThreshold: light.rimThreshold,
+      rimDirectionality: light.rimDirectionality,
       rimDirection: getSekaiPreviewRimDirection(),
       skinTintEnabled: false,
       hairShadowEnabled: false,
@@ -3452,10 +3548,10 @@ export class PjskViewerApp {
       baseColor: "#ffe4dc",
       warmColor: "#ffd4c8",
       lightDirection: this.directionalLight.position.clone(),
-      lightIntensity: initialLight.intensity,
-      ambientIntensity: initialLight.ambient,
-      faceSoftness: initialLight.faceSoftness,
-      faceSdfUseLightDirection: initialLight.faceSdfUseLightDirection,
+      lightIntensity: light.intensity,
+      ambientIntensity: light.ambient,
+      faceSoftness: light.faceSoftness,
+      faceSdfUseLightDirection: light.faceSdfUseLightDirection,
     });
 
     this.characterRoot = new THREE.Group();
@@ -3463,13 +3559,19 @@ export class PjskViewerApp {
     this.headSlot = new THREE.Group();
     this.characterRoot.add(this.bodySlot);
     this.characterRoot.add(this.headSlot);
-    this.applyCharacterHeight(initialLight.characterHeight);
+    this.applyCharacterHeight(light.characterHeight);
     this.scene.add(this.characterRoot);
+    this.setPresentationMode(options.presentationMode ?? "interactive");
+    this.applyCameraPreset(options.cameraPreset ?? "default");
 
     this.handleResize = this.handleResize.bind(this);
-    window.addEventListener("resize", this.handleResize);
-    this.handleResize();
-    this.render();
+    if (this.manageResize) {
+      window.addEventListener("resize", this.handleResize);
+      this.handleResize();
+    }
+    if (this.autoRender) {
+      this.render();
+    }
   }
 
   async importCharacterParts(
@@ -4394,6 +4496,10 @@ export class PjskViewerApp {
     return this.seekAnimationPhase(phase);
   }
 
+  setPresentationMode(mode: PjskPresentationMode) {
+    this.setCapturePresentation(mode === "capture");
+  }
+
   setCapturePresentation(enabled: boolean) {
     this.capturePresentationEnabled = enabled;
     if (enabled) {
@@ -4450,6 +4556,211 @@ export class PjskViewerApp {
     this.applyBodyNeckContactUniforms();
     this.updateShaderCameraPositions();
     this.updateShaderFaceBasis();
+  }
+
+  getCharacterRoot() {
+    return this.characterRoot;
+  }
+
+  getCanvas() {
+    return this.renderer.domElement;
+  }
+
+  setViewportSize(width: number, height: number) {
+    const nextWidth = Math.max(Math.trunc(width) || 0, 320);
+    const nextHeight = Math.max(Math.trunc(height) || 0, 320);
+    this.camera.aspect = nextWidth / nextHeight;
+    this.camera.updateProjectionMatrix();
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.renderer.setSize(nextWidth, nextHeight);
+    this.updateCaptureBackgroundTexture(nextWidth, nextHeight);
+  }
+
+  renderFrame() {
+    this.renderer.setRenderTarget(null);
+    this.renderer.render(this.scene, this.camera);
+  }
+
+  stepRuntimeFrame(
+    delta: number,
+    options: { advanceAnimation?: boolean; elapsedTime?: number } = {}
+  ) {
+    this.stepCaptureFrame(delta, options.advanceAnimation ?? true);
+    this.updateEyeThroughHairViewGate();
+    this.updateLayerMaterialTime(options.elapsedTime ?? this.clock.elapsedTime);
+  }
+
+  async loadRuntimePackage(
+    request: HarukiRuntimePackageRequest
+  ): Promise<RuntimePackageLoadResult> {
+    const loaded = await loadRuntimePackageFromBaseUrl(request.baseUrl, request);
+    this.currentLoadedRuntimePackage = loaded;
+    if (loaded.previewLight) {
+      this.updatePreviewLight(loaded.previewLight);
+    }
+    await this.setAnimationSelection(null);
+    this.setFaceMotionSet(null, null, null);
+    await this.importCombinedCharacter(loaded.combinedCharacter);
+    const animationUrl = loaded.combinedCharacter.bodyAsset.source.animationUrls?.[0];
+    const defaultAnimationKind: BodyAnimationKind | null = animationUrl
+      ? animationUrl.endsWith(".json") ? "unity-json" : "gltf"
+      : null;
+    const defaultLoopUrl = animationUrl && (
+      defaultAnimationKind === "unity-json" ||
+      /body[_-]?motion/i.test(animationUrl.split(/[/?#]/)[0] ?? "")
+    )
+      ? animationUrl
+      : null;
+    if (request.applyFaceMotion !== false && loaded.faceMotion) {
+      this.setFaceMotionSet(
+        loaded.faceMotion,
+        "face",
+        defaultLoopUrl ? "face_loop" : null
+      );
+    }
+    if (request.applyDefaultAnimation !== false && animationUrl) {
+      await this.setAnimationSelection({
+        motionUrl: animationUrl,
+        motionKind: defaultAnimationKind,
+        loopUrl: defaultLoopUrl,
+        loopKind: defaultLoopUrl ? defaultAnimationKind : null,
+      });
+    }
+    return loaded;
+  }
+
+  async setCustomSelection(
+    selection: CustomPartSelection
+  ): Promise<RuntimeCombinedCharacterAsset> {
+    const wardrobe = this.currentLoadedRuntimePackage?.wardrobe;
+    if (!wardrobe) {
+      throw new Error("No custom part package is loaded.");
+    }
+    const previousRoleId = wardrobe.getActiveRoleId();
+    const previousAnimation = this.captureAnimationPlaybackState();
+    const combined = await wardrobe.setCustomSelection(selection);
+    await this.importCombinedCharacter(combined);
+    if (previousRoleId === wardrobe.getActiveRoleId()) {
+      await this.continueAnimationPlaybackState(previousAnimation);
+    }
+    return combined;
+  }
+
+  async updateCustomSelection(
+    partType: RuntimePartType,
+    costume3dId: number | null
+  ): Promise<RuntimeCombinedCharacterAsset> {
+    const wardrobe = this.currentLoadedRuntimePackage?.wardrobe;
+    if (!wardrobe) {
+      throw new Error("No custom part package is loaded.");
+    }
+    const previousAnimation = this.captureAnimationPlaybackState();
+    const combined = await wardrobe.updateCustomSelection(partType, costume3dId);
+    await this.importCombinedCharacter(combined);
+    await this.continueAnimationPlaybackState(previousAnimation);
+    return combined;
+  }
+
+  async captureRoleParts(
+    request: HarukiCaptureRolePartsRequest
+  ): Promise<HarukiCaptureRolePartsResult> {
+    const wardrobe = this.currentLoadedRuntimePackage?.wardrobe;
+    if (!wardrobe) {
+      throw new Error("No custom part package is loaded.");
+    }
+    const role = parseRuntimeRoleId(request.roleId);
+    const activeRoleId = wardrobe.getActiveRoleId();
+    const nextRoleId = runtimeRoleId(role.characterId, role.unit);
+    if (activeRoleId !== nextRoleId) {
+      wardrobe.selectRole(role.characterId, role.unit);
+      await this.setAnimationSelection(null);
+      this.setFaceMotionSet(null, null, null);
+    }
+    const selection: CustomPartSelection = {
+      characterId: role.characterId,
+      unit: role.unit,
+      bodyCostume3dId: request.bodyCostume3dId,
+      headCostume3dId: request.headCostume3dId,
+      hairCostume3dId: request.hairCostume3dId,
+      headOptionalCostume3dId: request.headOptionalCostume3dId ?? null,
+      origin: "custom",
+    };
+    const combinedCharacter = await this.setCustomSelection(selection);
+    this.setPresentationMode("capture");
+    this.setSpringRuntimeMode("unity-prefab");
+    this.seekAnimationLoopPhase(request.phase ?? 0.5);
+    this.stepCaptureFrame(0, false);
+    this.frameCurrentCharacterForCapture();
+    this.applyCameraPreset("id5-debug");
+    this.shiftCameraRight(1);
+    this.renderFrame();
+    return {
+      selection,
+      combinedCharacter,
+      snapshots: this.getSnapshots(),
+    };
+  }
+
+  private captureAnimationPlaybackState(): AnimationPlaybackRestoreState {
+    return {
+      selection: {
+        motionUrl: this.currentAnimationUrl,
+        motionKind: this.currentAnimationKind,
+        loopUrl: this.currentAnimationLoopUrl,
+        loopKind: this.currentAnimationLoopKind,
+      },
+      activeTime: this.currentAnimationAction?.time ?? 0,
+      activeDuration: this.currentAnimationDuration,
+      activeWasLoop: Boolean(
+        this.currentAnimationLoopUrl &&
+        this.currentAnimationAction &&
+        !this.currentLoopAction &&
+        !this.queuedLoopClipName
+      ),
+      paused: this.animationPaused,
+      speed: this.animationPlaybackSpeed,
+      faceMotionTime: this.currentFaceMotionTime,
+      faceMotionEnabled: this.faceMotionEnabled,
+      capturedAtMs: performance.now(),
+    };
+  }
+
+  private async continueAnimationPlaybackState(
+    state: AnimationPlaybackRestoreState
+  ): Promise<void> {
+    await this.setAnimationSelection(state.selection);
+    if (state.activeWasLoop) {
+      this.activateQueuedLoopForSeek();
+    }
+    const elapsedSeconds = state.paused
+      ? 0
+      : Math.max(0, (performance.now() - state.capturedAtMs) / 1000) * state.speed;
+    const rawTargetTime = state.activeTime + elapsedSeconds;
+    const targetTime = state.activeWasLoop && state.activeDuration > 0
+      ? rawTargetTime % state.activeDuration
+      : rawTargetTime;
+    const phase = state.activeDuration > 0
+      ? targetTime / state.activeDuration
+      : 0;
+    if (state.selection.motionUrl) {
+      this.seekAnimationPhase(phase);
+    }
+    this.animationPlaybackSpeed = state.speed;
+    this.animationPaused = state.paused;
+    this.faceMotionEnabled = state.faceMotionEnabled;
+    this.currentFaceMotionTime = state.faceMotionTime + elapsedSeconds;
+    this.applyCurrentFaceMotionFrame();
+    this.applyAnimationPlaybackSettings();
+  }
+
+  getSnapshots(): HarukiEngineSnapshots {
+    return {
+      animation: this.getAnimationSnapshot(),
+      faceMotion: this.getFaceMotionSnapshot(),
+      springBone: this.getSpringBoneSnapshot(),
+      camera: this.getCameraDebugSnapshot(),
+      runtimeDebug: this.getRuntimeDebugSnapshot(),
+    };
   }
 
   setFaceMotionSet(
@@ -4914,7 +5225,9 @@ export class PjskViewerApp {
   destroy() {
     cancelAnimationFrame(this.animationFrame);
     this.stopAnimationPlayback();
-    window.removeEventListener("resize", this.handleResize);
+    if (this.manageResize) {
+      window.removeEventListener("resize", this.handleResize);
+    }
     this.controls.dispose();
     this.captureBackgroundTexture?.dispose();
     this.renderer.dispose();
@@ -7066,18 +7379,21 @@ export class PjskViewerApp {
   private handleResize() {
     const width = Math.max(this.container.clientWidth, 320);
     const height = Math.max(this.container.clientHeight, 320);
-    this.camera.aspect = width / height;
-    this.camera.updateProjectionMatrix();
-    this.renderer.setSize(width, height);
-    this.updateCaptureBackgroundTexture();
+    this.setViewportSize(width, height);
   }
 
-  private updateCaptureBackgroundTexture() {
-    const width = Math.max(Math.round(this.container.clientWidth), 320);
-    const height = Math.max(Math.round(this.container.clientHeight), 320);
+  private updateCaptureBackgroundTexture(width?: number, height?: number) {
+    const textureWidth = Math.max(
+      Math.round(width ?? this.container.clientWidth),
+      320
+    );
+    const textureHeight = Math.max(
+      Math.round(height ?? this.container.clientHeight),
+      320
+    );
     this.captureBackgroundTexture?.dispose();
     this.captureBackgroundTexture = new THREE.CanvasTexture(
-      drawCaptureTriangleBackground(width, height)
+      drawCaptureTriangleBackground(textureWidth, textureHeight)
     );
     this.captureBackgroundTexture.colorSpace = THREE.SRGBColorSpace;
     this.scene.background = this.captureBackgroundTexture;
@@ -7256,23 +7572,9 @@ export class PjskViewerApp {
   private render() {
     const delta = this.clock.getDelta();
     const elapsedTime = this.clock.elapsedTime;
-    this.currentAnimationMixer?.update(delta);
-    this.updateFaceMotion(delta);
-    this.syncLinkedHeadBones();
-    this.currentExtraBoneRuntime?.update();
-    if (this.isSpringRuntimeEnabled()) {
-      this.currentSpringRuntime?.update(delta);
-    } else {
-      this.currentSpringRuntime?.resetPose();
-    }
-    this.applyBodyNeckContactUniforms();
+    this.stepRuntimeFrame(delta, { advanceAnimation: true, elapsedTime });
     this.controls.update();
-    this.updateShaderCameraPositions();
-    this.updateShaderFaceBasis();
-    this.updateEyeThroughHairViewGate();
-    this.updateLayerMaterialTime(elapsedTime);
-    this.renderer.setRenderTarget(null);
-    this.renderer.render(this.scene, this.camera);
+    this.renderFrame();
     this.animationFrame = requestAnimationFrame(() => this.render());
   }
 

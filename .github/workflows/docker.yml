@@ -15,9 +15,12 @@ on:
       - 'package-lock.json'
       - 'src/**'
       - 'public/**'
-      - 'index.html'
+      - 'capture.html'
+      - 'capture-server.mjs'
       - 'vite.config.ts'
+      - 'vite.capture.config.ts'
       - 'tsconfig.json'
+      - 'tsconfig.build.json'
   workflow_dispatch:
 
 permissions:
