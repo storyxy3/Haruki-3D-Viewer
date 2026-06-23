@@ -7,17 +7,24 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import {
+  loadEngineConfig,
+  resolveCaptureServerOptions,
+} from "./config/haruki-3d-engine-config.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const distDir = path.join(__dirname, "dist");
-const runtimeRoot = path.resolve(process.env.HARUKI_RUNTIME_ROOT || "/data/runtime");
-const captureOutputDir = path.resolve(process.env.HARUKI_CAPTURE_OUTPUT_DIR || "/data/captures");
-const chromiumPath = process.env.CHROMIUM || "chromium";
-const port = Number(process.env.PORT || "8080");
-const defaultWidth = Math.max(Number(process.env.HARUKI_CAPTURE_WIDTH || "1400") || 1400, 320);
-const defaultHeight = Math.max(Number(process.env.HARUKI_CAPTURE_HEIGHT || "1000") || 1000, 320);
-const defaultScale = Math.min(Math.max(Number(process.env.HARUKI_CAPTURE_SCALE || "1") || 1, 1), 2);
-const defaultTimeoutMs = Math.max(Number(process.env.HARUKI_CAPTURE_TIMEOUT_MS || "45000") || 45000, 5000);
+const engineConfig = loadEngineConfig(process.env.HARUKI_ENGINE_CONFIG || undefined);
+const {
+  runtimeRoot,
+  captureOutputDir,
+  chromiumPath,
+  port,
+  defaultWidth,
+  defaultHeight,
+  defaultScale,
+  defaultTimeoutMs,
+} = resolveCaptureServerOptions(engineConfig);
 
 const mimeByExtension = new Map([
   [".html", "text/html; charset=utf-8"],

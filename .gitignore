@@ -1,3 +1,4 @@
 node_modules
 dist
 .DS_Store
+haruki-3d-engine.config.json

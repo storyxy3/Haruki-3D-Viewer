@@ -1,0 +1,20 @@
+{
+  "capture": {
+    "runtimeRoot": "/data/runtime",
+    "outputDir": "/data/captures",
+    "width": 1400,
+    "height": 1000,
+    "scale": 2,
+    "timeoutMs": 45000,
+    "phase": 0.5,
+    "clip": "motion_loop",
+    "springRuntimeMode": "unity-prefab",
+    "cameraPreset": "id5-debug"
+  },
+  "chromium": {
+    "executable": "chromium"
+  },
+  "server": {
+    "port": 8080
+  }
+}

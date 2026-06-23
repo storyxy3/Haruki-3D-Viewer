@@ -62,6 +62,7 @@ npm run capture:runtime -- \
 
 Useful capture options:
 
+- `--config <json>` loads capture defaults from a JSON config file.
 - `--phase <0..1>` seeks the selected loop phase.
 - `--scale <1..2>` renders with a higher device pixel ratio for sharper PNGs.
 - `--warmup-frames <n>` steps the runtime at 60fps before capture.
@@ -72,6 +73,19 @@ Useful capture options:
 - `--utj-springbone` is kept only as a compatibility alias for `unity-prefab`.
 
 SpringBone defaults to `unity-prefab` in current engine and capture defaults. Use `springRuntimeMode: "off"` or the capture flag when a caller needs a static pose.
+
+## Configuration
+
+Runtime-local defaults live in `haruki-3d-engine.config.json`. This file is ignored by git. Copy `haruki-3d-engine.config.example.json` when preparing a local, Docker, or server deployment.
+
+The example file is safe for public use and should not contain machine-specific paths. The real config can define:
+
+- `capture.runtimeRoot` and `capture.outputDir` for the capture server.
+- capture defaults such as `width`, `height`, `scale`, `timeoutMs`, `phase`, `clip`, `springRuntimeMode`, and `cameraPreset`.
+- `chromium.executable` when Chromium is not on `PATH`.
+- `server.port` for the HTTP capture service.
+
+For one-shot capture, pass `--config <json>`. For the HTTP service, set `HARUKI_ENGINE_CONFIG=<json>` or place `haruki-3d-engine.config.json` in the working directory. CLI flags override config values for one-shot capture. Server environment variables such as `HARUKI_RUNTIME_ROOT`, `HARUKI_CAPTURE_OUTPUT_DIR`, `HARUKI_CAPTURE_SCALE`, `HARUKI_CAPTURE_TIMEOUT_MS`, `CHROMIUM`, and `PORT` override config values.
 
 ## Runtime Behavior
 
@@ -106,7 +120,9 @@ The Docker image runs the capture HTTP service. Mount an exported runtime packag
 ```bash
 docker build -t haruki-3d-engine .
 docker run --rm -p 8080:8080 \
+  -e HARUKI_ENGINE_CONFIG=/app/haruki-3d-engine.config.json \
   -e HARUKI_CAPTURE_SCALE=2 \
+  -v /path/to/haruki-3d-engine.config.json:/app/haruki-3d-engine.config.json:ro \
   -v /path/to/runtime:/data/runtime:ro \
   -v /path/to/captures:/data/captures \
   haruki-3d-engine

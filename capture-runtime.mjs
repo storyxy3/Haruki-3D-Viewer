@@ -7,6 +7,10 @@ import os from "node:os";
 import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import {
+  loadEngineConfig,
+  resolveCaptureRuntimeOptions,
+} from "./config/haruki-3d-engine-config.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const distDir = path.join(__dirname, "dist");
@@ -25,30 +29,31 @@ const mimeByExtension = new Map([
   [".wasm", "application/wasm"],
 ]);
 
-function parseArgs(argv) {
+export function parseArgs(argv) {
   const options = {
     input: "",
     out: "",
     outDir: "",
     imageId: "",
-    phase: 0.5,
-    clip: "motion_loop",
-    width: 1400,
-    height: 1000,
-    scale: 1,
-    timeoutMs: 45000,
-    warmupMs: 0,
-    warmupFrames: 0,
-    warmupMode: "animation",
+    phase: undefined,
+    clip: "",
+    width: undefined,
+    height: undefined,
+    scale: undefined,
+    timeoutMs: undefined,
+    warmupMs: undefined,
+    warmupFrames: undefined,
+    warmupMode: "",
     yaw: "",
-    bodyDebugMode: "off",
-    renderIsolation: "normal",
-    springRuntimeMode: "unity-prefab",
-    cameraPreset: "id5-debug",
+    bodyDebugMode: "",
+    renderIsolation: "",
+    springRuntimeMode: "",
+    cameraPreset: "",
     traceUtjBones: [],
     traceUtjMaxEvents: 240,
     traceOut: "",
-    chromium: process.env.CHROMIUM || "chromium",
+    chromium: "",
+    configPath: "",
     build: false,
   };
 
@@ -118,6 +123,8 @@ function parseArgs(argv) {
       options.traceOut = readValue();
     } else if (arg === "--chromium") {
       options.chromium = readValue();
+    } else if (arg === "--config") {
+      options.configPath = readValue();
     } else if (arg === "--build") {
       options.build = true;
     } else if (arg === "--help" || arg === "-h") {
@@ -131,6 +138,9 @@ function parseArgs(argv) {
       throw new Error(`Unknown argument: ${arg}`);
     }
   }
+
+  const config = loadEngineConfig(options.configPath || undefined);
+  Object.assign(options, resolveCaptureRuntimeOptions(config, options));
 
   if (!options.input) {
     throw new Error("Missing --input converter output directory.");
@@ -227,6 +237,7 @@ Options:
                        Maximum retained spring trace events. Default: 240
   --trace-out <json>   Write only snapshot.utjSpringBoneTrace to a JSON file
   --chromium <path>    Chromium executable. Default: chromium
+  --config <json>      Config file. Default: haruki-3d-engine.config.json
   --build              Run npm run build before capture
 `);
 }
@@ -722,7 +733,9 @@ async function capture(options) {
   }
 }
 
-capture(parseArgs(process.argv.slice(2))).catch((error) => {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exitCode = 1;
-});
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  capture(parseArgs(process.argv.slice(2))).catch((error) => {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  });
+}
