@@ -382,9 +382,10 @@ async function waitForRuntimeReady(client, timeoutMs) {
   while (Date.now() < deadline) {
     const result = await client.send("Runtime.evaluate", {
       expression: `(() => ({
-        ready: typeof window.__HARUKI_CAPTURE_REQUEST__ === "function" &&
-          window.__PJSK_CAPTURE_READY__ === true,
-        error: window.__PJSK_CAPTURE_ERROR__ || document.body?.dataset?.captureError || ""
+        ready: typeof window.__HARUKI_CAPTURE_REQUEST__ === "function",
+        error: typeof window.__HARUKI_CAPTURE_REQUEST__ === "function"
+          ? ""
+          : window.__PJSK_CAPTURE_ERROR__ || document.body?.dataset?.captureError || ""
       }))()`,
       returnByValue: true,
     });
@@ -440,12 +441,14 @@ class CaptureRuntimeSession {
     const pageUrl = `http://127.0.0.1:${port}/capture.html?captureBase=/runtime/&capturePhase=0.5&captureClip=motion_loop&springRuntimeMode=unity-prefab&cameraPreset=id5-debug`;
     this.chromium = spawn(chromiumPath, [
       "--headless=new",
-      "--disable-gpu",
       "--hide-scrollbars",
       "--no-first-run",
       "--no-default-browser-check",
       "--disable-dev-shm-usage",
       "--no-sandbox",
+      "--enable-unsafe-swiftshader",
+      "--use-gl=angle",
+      "--use-angle=swiftshader",
       `--user-data-dir=${path.join(this.tempRoot, "profile")}`,
       `--disk-cache-dir=${path.join(this.tempRoot, "cache")}`,
       `--media-cache-dir=${path.join(this.tempRoot, "media-cache")}`,

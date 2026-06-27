@@ -540,6 +540,14 @@ function normalizeBodyManifestFromPart(
     manifest.skeleton.neckAttach.fallbackPosition,
     { x: 0, y: 1.75, z: 0.15 }
   );
+  manifest.proxy ||= {} as BodyAssetManifest["proxy"];
+  manifest.proxy = {
+    bodyColor: manifest.proxy.bodyColor ?? "#f2d0c3",
+    shadowColor: manifest.proxy.shadowColor ?? "#bf958a",
+    bodyScale: manifest.proxy.bodyScale ?? 1,
+    torsoLength: manifest.proxy.torsoLength ?? 2.2,
+    shoulderWidth: manifest.proxy.shoulderWidth ?? 1.1,
+  };
   manifest.bodyMaterials ||= [];
   const resolvePartUrl = createPartUrlResolver(runtime, resolveUrl);
   manifest.source = {
@@ -584,6 +592,19 @@ function normalizeHeadManifestFromParts(
     manifest.assembly.attachOrigin.fallbackPosition,
     { x: 0, y: 1.75, z: 0.15 }
   );
+  manifest.proxy ||= {} as HeadAssetManifest["proxy"];
+  manifest.proxy = {
+    faceColor: manifest.proxy.faceColor ?? "#fde2d9",
+    faceShadeColor: manifest.proxy.faceShadeColor ?? "#f7cdbf",
+    skinColorDefault: manifest.proxy.skinColorDefault ?? manifest.proxy.faceColor ?? "#fde2d9",
+    skinColor1: manifest.proxy.skinColor1 ?? manifest.proxy.faceShadeColor ?? "#f7cdbf",
+    skinColor2: manifest.proxy.skinColor2 ?? manifest.proxy.faceShadeColor ?? "#f7cdbf",
+    hairColor: manifest.proxy.hairColor ?? "#7b5b4a",
+    hairShadowColor: manifest.proxy.hairShadowColor ?? "#513d33",
+    headRadius: manifest.proxy.headRadius ?? 0.74,
+    faceDepth: manifest.proxy.faceDepth ?? 0.82,
+    hairArc: manifest.proxy.hairArc ?? 0.98,
+  };
   manifest.faceMaterials ||= [];
   const resolveHeadUrl = createPartUrlResolver(head, resolveUrl);
   manifest.source = {

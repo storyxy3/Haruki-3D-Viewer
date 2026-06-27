@@ -36,7 +36,7 @@ type PartRegistryInput = PartRegistryEntry[] | {
 
 export type RuntimePackageLoadResult = {
   kind: "part-registry" | "full-runtime";
-  combinedCharacter: RuntimeCombinedCharacterAsset;
+  combinedCharacter: RuntimeCombinedCharacterAsset | null;
   previewLight: PreviewLightState | null;
   faceMotion: FaceMotionSet | null;
   displayNameByUrl: Map<string, string>;
@@ -46,6 +46,7 @@ export type RuntimePackageLoadResult = {
 
 export type RuntimePackageLoadOptions = {
   fullRuntimeOnly?: boolean;
+  deferDefaultSelection?: boolean;
 };
 
 export async function loadRuntimePackageFromBaseUrl(
@@ -57,14 +58,18 @@ export async function loadRuntimePackageFromBaseUrl(
 
   if (!options.fullRuntimeOnly) {
     try {
-      const partSet = await loadPartPackageSetFromBaseUrl(baseUrl);
+      const partSet = await loadPartPackageSetFromBaseUrl(baseUrl, {
+        deferDefaultSelection: options.deferDefaultSelection,
+      });
       const wardrobe = new CustomWardrobeController({
         resolveUrl: (path) => resolveRuntimePackageUrl(baseUrl, path),
         loadPartRuntime: async (entry) =>
           loadPartRuntimePackage(partSet, entry, baseUrl),
       });
-      const combinedCharacter = wardrobe.loadPartPackageSet(partSet);
-      if (!combinedCharacter) {
+      const combinedCharacter = wardrobe.loadPartPackageSet(partSet, {
+        composeDefault: !options.deferDefaultSelection,
+      });
+      if (!combinedCharacter && !options.deferDefaultSelection) {
         throw new Error(`Part registry package did not expose a default custom selection from ${baseUrl}.`);
       }
       return {
@@ -172,7 +177,10 @@ async function loadFullRuntimePackageFromBaseUrl(
   };
 }
 
-async function loadPartPackageSetFromBaseUrl(baseUrl: string): Promise<PartPackageSet> {
+async function loadPartPackageSetFromBaseUrl(
+  baseUrl: string,
+  options: { deferDefaultSelection?: boolean } = {}
+): Promise<PartPackageSet> {
   const registry = normalizePartRegistry(await fetchRuntimeJson(
     resolveRuntimePackageUrl(baseUrl, "parts/part-registry.json")
   ) as PartRegistryInput);
@@ -184,6 +192,16 @@ async function loadPartPackageSetFromBaseUrl(baseUrl: string): Promise<PartPacka
   );
   const characterIndexEntries = characterIndex ? getCharacterIndexEntries(characterIndex) : [];
   const packages = new Map<string, PartRuntimePackage>();
+  if (options.deferDefaultSelection) {
+    return {
+      registry,
+      characterIndex: characterIndexEntries,
+      compatibility,
+      packages,
+      roleRuntimes: new Map<string, RoleRuntimePackage>(),
+      baseUrl,
+    };
+  }
   const candidates = selectPartRuntimeCandidates(registry, characterIndex, compatibility);
   const batchSize = 24;
   const maxCandidates = 720;
@@ -233,6 +251,37 @@ async function loadPartPackageSetFromBaseUrl(baseUrl: string): Promise<PartPacka
     roleRuntimes,
     baseUrl,
   };
+}
+
+export async function ensureRoleRuntimePackage(
+  partSet: PartPackageSet,
+  characterId: number,
+  unit: string | null
+): Promise<RoleRuntimePackage | null> {
+  const roleId = runtimeRoleId(characterId, unit);
+  const existing = partSet.roleRuntimes.get(roleId);
+  if (existing) {
+    return existing;
+  }
+  const entry = partSet.characterIndex.find((candidate) =>
+    candidate.roleRuntimePath &&
+    candidate.characterId === characterId &&
+    runtimeRoleId(candidate.characterId, candidate.unit ?? null) === roleId
+  );
+  if (!entry?.roleRuntimePath) {
+    return null;
+  }
+  const runtime = await fetchOptionalJson<RoleRuntimePackage>(
+    resolveRuntimePackageUrl(partSet.baseUrl, entry.roleRuntimePath)
+  );
+  if (!runtime) {
+    return null;
+  }
+  const normalized = normalizeRoleRuntimePackage(partSet.baseUrl, entry.roleRuntimePath, runtime);
+  const normalizedCharacterId = normalized.role?.characterId ?? characterId;
+  const normalizedUnit = normalized.role?.unit ?? unit;
+  partSet.roleRuntimes.set(runtimeRoleId(normalizedCharacterId, normalizedUnit), normalized);
+  return normalized;
 }
 
 async function loadRoleRuntimePackages(

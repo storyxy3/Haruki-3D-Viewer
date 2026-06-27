@@ -140,3 +140,75 @@ test("docker runtime image includes capture server config module", () => {
 
   assert.match(dockerfile, /COPY\s+config\s+\.\/config/);
 });
+
+test("capture server uses container-safe SwiftShader WebGL flags", () => {
+  const serverSource = fs.readFileSync(
+    path.join(repoRoot, "capture-server.mjs"),
+    "utf8"
+  );
+  const runtimeSource = fs.readFileSync(
+    path.join(repoRoot, "capture-runtime.mjs"),
+    "utf8"
+  );
+
+  assert.doesNotMatch(serverSource, /"--disable-gpu"/);
+  assert.match(serverSource, /"--use-gl=angle"/);
+  assert.match(serverSource, /"--use-angle=swiftshader"/);
+  assert.match(serverSource, /"--enable-unsafe-swiftshader"/);
+  assert.doesNotMatch(runtimeSource, /"--disable-gpu"/);
+  assert.match(runtimeSource, /"--use-gl=angle"/);
+  assert.match(runtimeSource, /"--use-angle=swiftshader"/);
+  assert.match(runtimeSource, /"--enable-unsafe-swiftshader"/);
+});
+
+test("capture server readiness waits for request API, not default wardrobe bootstrap", () => {
+  const serverSource = fs.readFileSync(
+    path.join(repoRoot, "capture-server.mjs"),
+    "utf8"
+  );
+
+  assert.match(
+    serverSource,
+    /typeof window\.__HARUKI_CAPTURE_REQUEST__ === "function"/
+  );
+  assert.doesNotMatch(
+    serverSource,
+    /ready:\s*typeof window\.__HARUKI_CAPTURE_REQUEST__ === "function" &&\s*window\.__PJSK_CAPTURE_READY__ === true/
+  );
+});
+
+test("part runtime body manifests provide proxy color defaults", () => {
+  const composerSource = fs.readFileSync(
+    path.join(repoRoot, "src/parts/runtimePartComposer.ts"),
+    "utf8"
+  );
+
+  assert.match(composerSource, /manifest\.proxy \|\|=/);
+  assert.match(composerSource, /bodyColor:\s*manifest\.proxy\.bodyColor \?\? "#f2d0c3"/);
+  assert.match(composerSource, /shadowColor:\s*manifest\.proxy\.shadowColor \?\? "#bf958a"/);
+  assert.match(composerSource, /faceColor:\s*manifest\.proxy\.faceColor \?\? "#fde2d9"/);
+  assert.match(composerSource, /skinColorDefault:\s*manifest\.proxy\.skinColorDefault \?\? manifest\.proxy\.faceColor \?\? "#fde2d9"/);
+  assert.match(composerSource, /hairColor:\s*manifest\.proxy\.hairColor \?\? "#7b5b4a"/);
+});
+
+test("unity prefab source graph mounts composed part head without exporter assembly metadata", () => {
+  const engineSource = fs.readFileSync(
+    path.join(repoRoot, "src/engine/Haruki3DEngine.ts"),
+    "utf8"
+  );
+
+  assert.match(engineSource, /const runtimeMountPath = assembly\?\.runtimeMountPath \?\? "PJSK_RuntimeMount_face"/);
+  assert.match(engineSource, /if \(bodyAttach && headRoot\)/);
+  assert.doesNotMatch(engineSource, /if \(bodyAttach && headRoot && assembly\?\.runtimeMountPath\)/);
+});
+
+test("unity prefab source graph mounts every duplicate composed face root", () => {
+  const engineSource = fs.readFileSync(
+    path.join(repoRoot, "src/engine/Haruki3DEngine.ts"),
+    "utf8"
+  );
+
+  assert.match(engineSource, /const headRoots = collectUnityPrefabHeadRoots/);
+  assert.match(engineSource, /for \(const mountedHeadRoot of headRoots\)/);
+  assert.match(engineSource, /findUnityPrefabChildByName\(mountedHeadRoot, "Position"\)/);
+});

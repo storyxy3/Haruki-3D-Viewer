@@ -642,12 +642,14 @@ async function capture(options) {
     (options.yaw ? `&characterYawMode=${encodeURIComponent(options.yaw)}` : "");
   const chromium = spawn(options.chromium, [
     "--headless=new",
-    "--disable-gpu",
     "--hide-scrollbars",
     "--no-first-run",
     "--no-default-browser-check",
     "--disable-dev-shm-usage",
     "--no-sandbox",
+    "--enable-unsafe-swiftshader",
+    "--use-gl=angle",
+    "--use-angle=swiftshader",
     `--user-data-dir=${chromiumProfileDir}`,
     `--disk-cache-dir=${chromiumCacheDir}`,
     `--media-cache-dir=${chromiumMediaCacheDir}`,

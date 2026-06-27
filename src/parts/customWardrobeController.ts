@@ -25,9 +25,13 @@ export class CustomWardrobeController {
   constructor(private readonly options: CustomWardrobeControllerOptions) {
   }
 
-  loadPartPackageSet(partSet: PartPackageSet): RuntimeCombinedCharacterAsset | null {
+  loadPartPackageSet(
+    partSet: PartPackageSet,
+    options: { composeDefault?: boolean } = {}
+  ): RuntimeCombinedCharacterAsset | null {
     this.partSet = partSet;
-    this.selection = getDefaultCustomSelection(partSet);
+    const composeDefault = options.composeDefault ?? true;
+    this.selection = composeDefault ? getDefaultCustomSelection(partSet) : null;
     this.activeRoleId = this.selection
       ? runtimeRoleId(this.selection.characterId, this.selection.unit)
       : null;

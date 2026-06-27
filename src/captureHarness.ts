@@ -54,6 +54,8 @@ const engine = new Haruki3DEngine({
   manageResize: false,
 });
 
+let captureRuntimePackagePromise: Promise<void> | null = null;
+
 function getCaptureWindow() {
   return window as CaptureWindow;
 }
@@ -191,14 +193,35 @@ function setCaptureError(error: unknown) {
   getCaptureWindow().__PJSK_CAPTURE_ERROR__ = message;
 }
 
+async function ensureCaptureRuntimePackage(config: CaptureConfig) {
+  if (!captureRuntimePackagePromise) {
+    captureRuntimePackagePromise = engine.loadRuntimePackage({
+      baseUrl: config.baseUrl,
+      fullRuntimeOnly: config.fullRuntimeOnly,
+      deferDefaultSelection: !config.fullRuntimeOnly,
+      applyDefaultAnimation: config.fullRuntimeOnly,
+      applyFaceMotion: config.fullRuntimeOnly,
+    }).then(() => undefined, (error) => {
+      captureRuntimePackagePromise = null;
+      throw error;
+    });
+  }
+  await captureRuntimePackagePromise;
+}
+
 getCaptureWindow().__HARUKI_CAPTURE_REQUEST__ = async (
   request: HarukiCaptureRolePartsRequest
 ) => {
   try {
+    const config = readCaptureConfig();
+    if (!config) {
+      throw new Error("Missing captureBase for role parts capture.");
+    }
     getCaptureWindow().__PJSK_CAPTURE_READY__ = false;
     getCaptureWindow().__PJSK_CAPTURE_ERROR__ = "";
     document.body.dataset.captureReady = "false";
     document.body.dataset.captureError = "";
+    await ensureCaptureRuntimePackage(config);
     engine.setViewportSize(root.clientWidth, root.clientHeight);
     const result = await engine.captureRoleParts({
       ...request,
@@ -296,11 +319,13 @@ async function bootstrapCapture() {
       config.utjTraceBones,
       config.utjTraceMaxEvents
     );
-    await engine.loadRuntimePackage({
-      baseUrl: config.baseUrl,
-      fullRuntimeOnly: config.fullRuntimeOnly,
-    });
-    await prepareCaptureFrame(config);
+    await ensureCaptureRuntimePackage(config);
+    if (config.fullRuntimeOnly) {
+      await prepareCaptureFrame(config);
+    } else {
+      getCaptureWindow().__PJSK_CAPTURE_READY__ = true;
+      document.body.dataset.captureReady = "true";
+    }
   } catch (error) {
     setCaptureError(error);
   }
