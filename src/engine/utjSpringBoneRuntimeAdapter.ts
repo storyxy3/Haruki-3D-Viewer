@@ -480,6 +480,11 @@ export type UtjSpringBoneTraceSnapshot = {
   events: UtjSpringBoneTraceEvent[];
 };
 
+export type UtjSpringBoneDebugOptions = {
+  springDebugBones?: readonly string[];
+  springDebugAllOffsets?: boolean;
+};
+
 export type UtjSpringBoneRuntimeSnapshot = {
   runtimeMode?: "webgl-utj" | "unity-prefab";
   enabled: boolean;
@@ -525,10 +530,34 @@ export type UtjSpringBoneRuntimeSnapshot = {
     managerDynamicRatio?: number;
     dynamicRatio: number;
     isAnimated?: boolean;
+    automaticUpdates?: boolean;
+    boneEnabled?: boolean;
+    bonePaused?: boolean;
+    isSumOfForcesOnBone?: boolean;
+    simulationFrameRate?: number;
+    slowMotionScale?: number;
+    updateSkipReason?: string | null;
     animatedTipDelta: VectorSnapshot;
     velocity: VectorSnapshot;
     springForce: VectorSnapshot;
     colliderBindings: RuntimeColliderBindingDiagnostic[];
+  }[];
+  debugOffsets?: UtjSpringBoneRuntimeSnapshot["topOffsets"];
+  controlledPartCounts?: {
+    runtimePartIndex: number | null;
+    runtimePartType: string | null;
+    sourceRoot: string | null;
+    count: number;
+    sampleNames: string[];
+    samplePaths: string[];
+  }[];
+  controlledHairSamples?: {
+    name: string;
+    path: string;
+    sourceBonePath: string | null;
+    runtimePartIndex: number | null;
+    runtimePartType: string | null;
+    resolvedIsSkinnedBone: boolean;
   }[];
   skirtOffsets: {
     name: string;
@@ -559,6 +588,13 @@ export type UtjSpringBoneRuntimeSnapshot = {
     managerDynamicRatio?: number;
     dynamicRatio: number;
     isAnimated?: boolean;
+    automaticUpdates?: boolean;
+    boneEnabled?: boolean;
+    bonePaused?: boolean;
+    isSumOfForcesOnBone?: boolean;
+    simulationFrameRate?: number;
+    slowMotionScale?: number;
+    updateSkipReason?: string | null;
     animatedTipDelta: VectorSnapshot;
     velocity: VectorSnapshot;
     headMovement: VectorSnapshot;
@@ -1329,7 +1365,10 @@ export class UtjSpringBoneRuntime {
     return constrained;
   }
 
-  getSnapshot(enabled = true): UtjSpringBoneRuntimeSnapshot {
+  getSnapshot(
+    enabled = true,
+    debugOptions: UtjSpringBoneDebugOptions = {}
+  ): UtjSpringBoneRuntimeSnapshot {
     const colliderIndexes = new Set<RuntimeCollider>();
     const topOffsets: UtjSpringBoneRuntimeSnapshot["topOffsets"] = [];
     const skirtOffsets: UtjSpringBoneRuntimeSnapshot["skirtOffsets"] = [];
@@ -1438,6 +1477,7 @@ export class UtjSpringBoneRuntime {
     }
     topOffsets.sort((a, b) => b.offset - a.offset);
     skirtOffsets.sort((a, b) => b.offset - a.offset);
+    const debugOffsets = selectDebugOffsets(topOffsets, debugOptions);
     return {
       runtimeMode: "webgl-utj",
       enabled,
@@ -1449,6 +1489,7 @@ export class UtjSpringBoneRuntime {
       maxSleeveOffset,
       maxSkirtOffset,
       topOffsets: topOffsets.slice(0, 8),
+      debugOffsets,
       skirtOffsets,
       bindingDiagnostics: this.bones
         .flatMap((bone) => bone.colliderBindingDiagnostics)
@@ -1569,6 +1610,37 @@ function vectorSnapshot(vector: THREE.Vector3): VectorSnapshot {
     z: vector.z,
     length: vector.length(),
   };
+}
+
+function selectDebugOffsets(
+  offsets: UtjSpringBoneRuntimeSnapshot["topOffsets"],
+  debugOptions: UtjSpringBoneDebugOptions
+) {
+  if (debugOptions.springDebugAllOffsets) {
+    return offsets;
+  }
+  const filters = (debugOptions.springDebugBones ?? [])
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean);
+  if (filters.length === 0) {
+    return [];
+  }
+  return offsets.filter((offset) => {
+    const haystack = [
+      offset.name,
+      offset.path,
+      offset.springName,
+      offset.sourceBoneName,
+      offset.sourceBonePath,
+      offset.pivotSourceName,
+      offset.pivotSourcePath,
+      offset.pivotResolvedPath,
+    ]
+      .filter((value): value is string => typeof value === "string")
+      .join("\n")
+      .toLowerCase();
+    return filters.some((filter) => haystack.includes(filter));
+  });
 }
 
 function nullableVectorSnapshot(vector?: THREE.Vector3): VectorSnapshot | null {

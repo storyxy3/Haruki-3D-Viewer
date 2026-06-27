@@ -24,6 +24,13 @@ const {
   defaultHeight,
   defaultScale,
   defaultTimeoutMs,
+  defaultPhase,
+  defaultClip,
+  defaultWarmupMs,
+  defaultWarmupFrames,
+  defaultWarmupMode,
+  defaultSpringRuntimeMode,
+  defaultCameraPreset,
 } = resolveCaptureServerOptions(engineConfig);
 
 const mimeByExtension = new Map([
@@ -136,6 +143,13 @@ function validateCaptureRequest(input) {
     }
     return value;
   };
+  const readStringList = (...values) => values
+    .flatMap((value) => Array.isArray(value) ? value : [value])
+    .flatMap((value) => typeof value === "string" ? value.split(",") : [])
+    .map((value) => value.trim())
+    .filter(Boolean);
+  const readBoolean = (value) => value === true || value === "true" || value === 1 || value === "1";
+  const traceMaxEvents = Number(input.traceUtjMaxEvents);
   const optionalHeadOptional = input.headOptionalCostume3dId;
   return {
     imageId,
@@ -147,12 +161,30 @@ function validateCaptureRequest(input) {
       optionalHeadOptional === undefined || optionalHeadOptional === null
         ? null
         : readId("headOptionalCostume3dId"),
-    phase: 0.5,
+    phase: Number(input.phase) || defaultPhase,
+    cameraPreset: normalizeCameraPreset(input.cameraPreset, defaultCameraPreset),
+    warmupMs: Math.max(Math.trunc(Number(input.warmupMs) || defaultWarmupMs), 0),
+    warmupFrames: Math.max(Math.trunc(Number(input.warmupFrames) || defaultWarmupFrames), 0),
+    warmupMode: input.warmupMode === "runtime" ? "runtime" : defaultWarmupMode === "runtime" ? "runtime" : "animation",
     width: Math.max(Math.trunc(Number(input.width) || defaultWidth), 320),
     height: Math.max(Math.trunc(Number(input.height) || defaultHeight), 320),
     scale: Math.min(Math.max(Number(input.scale) || defaultScale, 1), 2),
     timeoutMs: Math.max(Math.trunc(Number(input.timeoutMs) || defaultTimeoutMs), 5000),
+    traceUtjBones: readStringList(input.traceUtjBones, input.traceUtjBone),
+    traceUtjMaxEvents: Math.max(
+      Math.trunc(Number.isFinite(traceMaxEvents) ? traceMaxEvents : 240),
+      1
+    ),
+    springDebugBones: readStringList(input.springDebugBones, input.springDebugBone),
+    springDebugAllOffsets: readBoolean(input.springDebugAllOffsets),
   };
+}
+
+function normalizeCameraPreset(value, fallback) {
+  if (value === undefined || value === null || value === "") {
+    return fallback;
+  }
+  return value === "default" ? "default" : "capture";
 }
 
 function makeTempDir() {
@@ -438,7 +470,17 @@ class CaptureRuntimeSession {
     this.chromiumLog = "";
     this.tempRoot = makeTempDir();
     const debugPort = await getFreePort();
-    const pageUrl = `http://127.0.0.1:${port}/capture.html?captureBase=/runtime/&capturePhase=0.5&captureClip=motion_loop&springRuntimeMode=unity-prefab&cameraPreset=id5-debug`;
+    const pageParams = new URLSearchParams({
+      captureBase: "/runtime/",
+      capturePhase: String(defaultPhase),
+      captureClip: defaultClip,
+      captureWarmupMs: String(defaultWarmupMs),
+      captureWarmupFrames: String(defaultWarmupFrames),
+      captureWarmupMode: defaultWarmupMode,
+      springRuntimeMode: defaultSpringRuntimeMode,
+      cameraPreset: defaultCameraPreset,
+    });
+    const pageUrl = `http://127.0.0.1:${port}/capture.html?${pageParams.toString()}`;
     this.chromium = spawn(chromiumPath, [
       "--headless=new",
       "--hide-scrollbars",

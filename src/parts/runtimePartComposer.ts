@@ -2,6 +2,7 @@ import type {
   BodyAssetManifest,
   HeadAssetManifest,
 } from "../data/sampleScene";
+import { characterHeightMetersById } from "../data/sampleScene";
 import type { RuntimeCombinedCharacterAsset } from "../engine/Haruki3DEngine";
 
 export type RuntimePartType = "body" | "head" | "hair" | "head_optional";
@@ -42,6 +43,10 @@ export type HeadHairCompatibility = {
     unit?: string | null;
     headCostume3dId: number;
     hairCostume3dId: number;
+    headCompositionKind?: string | null;
+    mainHeadCostume3dId?: number | null;
+    mainHairCostume3dId?: number | null;
+    activeContributors?: string[] | null;
   }>;
   denied?: Array<{
     unit?: string | null;
@@ -53,6 +58,10 @@ export type HeadHairCompatibility = {
     headCostume3dId: number;
     hairCostume3dId: number;
     state?: string | null;
+    headCompositionKind?: string | null;
+    mainHeadCostume3dId?: number | null;
+    mainHairCostume3dId?: number | null;
+    activeContributors?: string[] | null;
   }>;
 };
 
@@ -65,6 +74,7 @@ export type PartRuntimePackage = {
     characterId: number;
     unit?: string | null;
     name?: string | null;
+    headCostume3dAssetbundleType?: string | null;
   };
   mount?: Record<string, unknown>;
   manifest: unknown;
@@ -134,6 +144,23 @@ type RuntimeSetup = {
   managerColliderCaches?: RuntimeManagerColliderCache[];
   warnings?: string[];
   [key: string]: unknown;
+};
+
+type RuntimePrefabGraph = Record<string, unknown> & {
+  transforms?: RuntimePrefabTransform[];
+  monoBehaviours?: RuntimePrefabMonoBehaviour[];
+};
+
+type RuntimePrefabTransform = Record<string, unknown> & {
+  pathId?: number;
+  parentPathId?: number | null;
+  childPathIds?: number[];
+  runtimePartIndex?: number;
+};
+
+type RuntimePrefabMonoBehaviour = Record<string, unknown> & {
+  pathId?: number;
+  runtimePartIndex?: number;
 };
 
 type RuntimeManager = Record<string, unknown> & {
@@ -211,12 +238,18 @@ type RuntimePartWithIndex = {
 
 type RemappedRuntimePart = RuntimePartWithIndex & {
   setup: RuntimeSetup;
+  prefabGraph: RuntimePrefabGraph | null;
   managers: RuntimeManager[];
   bones: RuntimeBone[];
   colliders: RuntimeCollider[];
   colliderBindings: RuntimeColliderBinding[];
   managerColliderCaches: RuntimeManagerColliderCache[];
   activeRoots: string[];
+};
+
+type HeadHairComposition = {
+  kind: string;
+  activePartTypes: ReadonlySet<RuntimePartType>;
 };
 
 export function normalizeRuntimePartType(value: string): RuntimePartType {
@@ -327,17 +360,20 @@ export function composeRuntimeCombinedCharacterAsset(
 
   assertSameRole(selection.characterId, selection.unit, [body, head, hair, optional].filter(Boolean) as PartRuntimePackage[]);
   assertHeadHairCompatible(partSet.compatibility, selection);
+  const allRuntimes = [body, head, hair, optional].filter(Boolean) as PartRuntimePackage[];
+  const headHairComposition = resolveHeadHairComposition(partSet, selection, allRuntimes);
+  const contributingRuntimes = filterRuntimeContributors(allRuntimes, headHairComposition);
 
   const roleRuntime = partSet.roleRuntimes.get(selectionRoleId) ?? null;
   const bodyManifest = normalizeBodyManifestFromPart(body, resolveUrl);
   applyRoleRuntimeMotion(bodyManifest, roleRuntime);
   const headManifest = normalizeHeadManifestFromParts(
-    [head, hair, optional].filter(Boolean) as PartRuntimePackage[],
+    filterRuntimeContributors([head, hair, optional].filter(Boolean) as PartRuntimePackage[], headHairComposition),
     selection,
     resolveUrl
   );
   const runtimeExtension = composeRuntimeExtension(
-    [body, head, hair, optional].filter(Boolean) as PartRuntimePackage[],
+    contributingRuntimes,
     bodyManifest,
     headManifest,
     roleRuntime
@@ -533,6 +569,8 @@ function normalizeBodyManifestFromPart(
   manifest.id ||= `body-${runtime.part.costume3dId}`;
   manifest.displayName ||= runtime.part.name ?? manifest.id;
   manifest.characterId = String(runtime.part.characterId).padStart(2, "0");
+  manifest.characterHeightMeters ??= resolveRuntimePartCharacterHeightMeters(runtime.part.characterId);
+  manifest.materialPipeline ??= "embedded";
   manifest.source ||= { bundleRoot: "", manifestUrl: "", meshUrl: "" };
   manifest.neckAnchor = normalizeVec3(manifest.neckAnchor, { x: 0, y: 1.75, z: 0.15 });
   manifest.skeleton ||= {} as BodyAssetManifest["skeleton"];
@@ -585,6 +623,8 @@ function normalizeHeadManifestFromParts(
   manifest.id = `head-${selection.headCostume3dId}-hair-${selection.hairCostume3dId}`;
   manifest.displayName = `Head ${selection.headCostume3dId} / Hair ${selection.hairCostume3dId}`;
   manifest.characterId = String(selection.characterId).padStart(2, "0");
+  manifest.characterHeightMeters ??= resolveRuntimePartCharacterHeightMeters(selection.characterId);
+  manifest.materialPipeline ??= "embedded";
   manifest.source ||= { bundleRoot: "", manifestUrl: "", meshUrl: "" };
   manifest.rawImportOffset = normalizeVec3(manifest.rawImportOffset, { x: 0, y: 0, z: 0 });
   manifest.assembly ||= {} as HeadAssetManifest["assembly"];
@@ -651,17 +691,112 @@ function normalizeVec3(
   };
 }
 
+function resolveHeadHairComposition(
+  partSet: PartPackageSet,
+  selection: CustomPartSelection,
+  runtimes: PartRuntimePackage[]
+): HeadHairComposition {
+  const metadata = findHeadHairCompositionMetadata(partSet.compatibility, selection);
+  const activeFromMetadata = metadata?.activeContributors
+    ?.map((value) => tryNormalizeRuntimePartType(value))
+    .filter((value): value is RuntimePartType => Boolean(value));
+  if (activeFromMetadata?.length) {
+    return {
+      kind: metadata?.headCompositionKind ?? "registry_metadata",
+      activePartTypes: new Set(["body", "head_optional", ...activeFromMetadata]),
+    };
+  }
+
+  const exactPreset = partSet.characterIndex.find((entry) =>
+    entry.characterId === selection.characterId &&
+    sameUnit(entry.unit, selection.unit) &&
+    entry.bodyCostume3dId === selection.bodyCostume3dId &&
+    entry.headCostume3dId === selection.headCostume3dId &&
+    entry.hairCostume3dId === selection.hairCostume3dId &&
+    (entry.headOptionalCostume3dId ?? null) === (selection.headOptionalCostume3dId ?? null)
+  );
+  const head = runtimes.find((runtime) => normalizeRuntimePartType(runtime.part.partType) === "head");
+  if (
+    exactPreset &&
+    head &&
+    isCompleteHeadRuntime(head)
+  ) {
+    return {
+      kind: metadata?.headCompositionKind ?? "complete_head",
+      activePartTypes: new Set(["body", "head", "head_optional"]),
+    };
+  }
+
+  return {
+    kind: metadata?.headCompositionKind ?? "custom_head_hair",
+    activePartTypes: new Set(["body", "head", "hair", "head_optional"]),
+  };
+}
+
+function findHeadHairCompositionMetadata(
+  compatibility: HeadHairCompatibility | null,
+  selection: CustomPartSelection
+) {
+  if (!compatibility) {
+    return null;
+  }
+  const matches = [
+    ...(compatibility.rules ?? []),
+    ...(compatibility.allowed ?? []),
+  ].filter((entry) =>
+    compatibilityKey(entry.unit, entry.headCostume3dId, entry.hairCostume3dId) ===
+    compatibilityKey(selection.unit, selection.headCostume3dId, selection.hairCostume3dId)
+  );
+  return matches.find((entry) =>
+    entry.headCompositionKind || entry.activeContributors?.length
+  ) ?? null;
+}
+
+function filterRuntimeContributors(
+  runtimes: PartRuntimePackage[],
+  composition: HeadHairComposition
+): PartRuntimePackage[] {
+  return runtimes.filter((runtime) =>
+    isRuntimeContributor(runtime, composition)
+  );
+}
+
+function isRuntimeContributor(
+  runtime: PartRuntimePackage,
+  composition: HeadHairComposition
+) {
+  return composition.activePartTypes.has(normalizeRuntimePartType(runtime.part.partType));
+}
+
+function isCompleteHeadRuntime(runtime: PartRuntimePackage) {
+  const type = readOptionalString(runtime.part.headCostume3dAssetbundleType);
+  if (
+    type &&
+    !["head_and_hair", "head_all", "head_front", "head_back"].includes(type)
+  ) {
+    return false;
+  }
+  const rendererPaths = readRecordArray(runtime.nativeMeshes?.meshes)
+    .map((mesh) => readOptionalString(mesh.rendererTransformPath));
+  return rendererPaths.includes("face/Face") && rendererPaths.includes("face/Hair");
+}
+
+function resolveRuntimePartCharacterHeightMeters(characterId: number | string | null | undefined) {
+  const normalized = String(characterId ?? "").padStart(2, "0");
+  return characterHeightMetersById[normalized] ?? 1;
+}
+
 function readOptionalString(value: unknown) {
   return typeof value === "string" ? value : "";
 }
 
 function composeRuntimeExtension(
-  runtimes: PartRuntimePackage[],
+  contributorRuntimes: PartRuntimePackage[],
   bodyAsset: BodyAssetManifest,
   headAsset: HeadAssetManifest,
   roleRuntime: RoleRuntimePackage | null
 ) {
-  const runtimeSetup = mergeRuntimeSetup(runtimes);
+  const runtimeSetup = mergeRuntimeSetup(contributorRuntimes);
   return {
     version: "0414",
     sourceKind: "viewer_composed_part_runtime_package",
@@ -669,17 +804,17 @@ function composeRuntimeExtension(
     headAsset,
     bodyManifest: bodyAsset,
     headManifest: headAsset,
-    materialSlots: runtimes.flatMap((runtime) => runtime.materialSlots ?? []),
-    textureRoles: runtimes.flatMap((runtime) => runtime.textureRoles ?? []),
-    characterTextures: Object.assign({}, ...runtimes.map((runtime) => runtime.characterTextures ?? {})),
-    nativeMeshes: mergeNativeMeshes(runtimes, runtimeSetup),
+    materialSlots: contributorRuntimes.flatMap((runtime) => runtime.materialSlots ?? []),
+    textureRoles: contributorRuntimes.flatMap((runtime) => runtime.textureRoles ?? []),
+    characterTextures: Object.assign({}, ...contributorRuntimes.map((runtime) => runtime.characterTextures ?? {})),
+    nativeMeshes: mergeNativeMeshes(contributorRuntimes, runtimeSetup),
     motionPackage: roleRuntime?.motionPackage ?? null,
     morphChannelBindings: headAsset.morphChannelBindings ?? [],
     pjskSpringBone: {
       runtimeUnitySetup: runtimeSetup,
     },
     warnings: [
-      ...runtimes.flatMap((runtime) => runtime.warnings ?? []),
+      ...contributorRuntimes.flatMap((runtime) => runtime.warnings ?? []),
       ...(roleRuntime?.warnings ?? []),
     ],
   };
@@ -689,8 +824,8 @@ function mergeRuntimeSetup(runtimes: PartRuntimePackage[]): RuntimeSetup {
   const remappedParts = runtimes.map((runtime, partIndex) => remapRuntimePart(runtime, partIndex));
   const firstSetup = remappedParts[0]?.setup ?? {};
   const prefabGraphs = remappedParts
-    .map((part) => part.runtime.springBone?.prefabGraph)
-    .filter((value) => value !== undefined);
+    .map((part) => part.prefabGraph)
+    .filter((value): value is RuntimePrefabGraph => value !== null);
   const warnings = runtimes.flatMap((runtime) => [
     ...(runtime.warnings ?? []),
     ...((runtime.springBone?.warnings as string[] | undefined) ?? []),
@@ -700,7 +835,7 @@ function mergeRuntimeSetup(runtimes: PartRuntimePackage[]): RuntimeSetup {
   const bones = remappedParts.flatMap((part) => part.bones);
   const colliders = remappedParts.flatMap((part) => part.colliders);
   const colliderBindings = rebuildColliderBindings(remappedParts);
-  const managerColliderCaches = rebuildManagerColliderCaches(remappedParts);
+  const managerColliderCaches = rebuildManagerColliderCaches(remappedParts, colliderBindings);
   const bindingDecisions = rebuildBindingDecisions(bones, colliderBindings);
   return {
     ...firstSetup,
@@ -799,21 +934,186 @@ function getPartRuntimeSetup(runtime: PartRuntimePackage): RuntimeSetup {
 function remapRuntimePart(runtime: PartRuntimePackage, partIndex: number): RemappedRuntimePart {
   const setup = getPartRuntimeSetup(runtime);
   const partType = normalizeRuntimePartType(runtime.part.partType);
+  const selectedActiveRoots = selectRuntimePartActiveRoots(
+    partType,
+    readStringArray(setup.activeRootProfile?.activeRoots)
+  );
+  const managers = filterRuntimeRecordsByActiveRoots(
+    cloneArrayWithPartPrefix(setup.managers, partIndex, partType) as RuntimeManager[],
+    selectedActiveRoots
+  );
+  const bones = filterRuntimeRecordsByActiveRoots(
+    cloneArrayWithPartPrefix(setup.bones, partIndex, partType) as RuntimeBone[],
+    selectedActiveRoots
+  );
+  const colliders = filterRuntimeRecordsByActiveRoots(
+    cloneArrayWithPartPrefix(setup.colliders, partIndex, partType) as RuntimeCollider[],
+    selectedActiveRoots
+  );
+  const colliderBindings = filterColliderBindingsByActiveBones(
+    cloneArrayWithPartPrefix(setup.colliderBindings, partIndex, partType) as RuntimeColliderBinding[],
+    bones
+  );
+  const managerColliderCaches = filterManagerColliderCachesByActiveManagers(
+    cloneArrayWithPartPrefix(
+    setup.managerColliderCaches,
+    partIndex,
+    partType
+    ) as RuntimeManagerColliderCache[],
+    managers
+  );
+  withInferredSpringManagerBoneRefs(managers, bones, managerColliderCaches);
   return {
     runtime,
     partIndex,
     partType,
     setup,
-    managers: cloneArrayWithPartPrefix(setup.managers, partIndex) as RuntimeManager[],
-    bones: cloneArrayWithPartPrefix(setup.bones, partIndex) as RuntimeBone[],
-    colliders: cloneArrayWithPartPrefix(setup.colliders, partIndex) as RuntimeCollider[],
-    colliderBindings: cloneArrayWithPartPrefix(setup.colliderBindings, partIndex) as RuntimeColliderBinding[],
-    managerColliderCaches: cloneArrayWithPartPrefix(setup.managerColliderCaches, partIndex) as RuntimeManagerColliderCache[],
-    activeRoots: readStringArray(setup.activeRootProfile?.activeRoots),
+    prefabGraph: remapPrefabGraph(runtime.springBone?.prefabGraph, partIndex),
+    managers,
+    bones,
+    colliders,
+    colliderBindings,
+    managerColliderCaches,
+    activeRoots: selectedActiveRoots,
   };
 }
 
-function cloneArrayWithPartPrefix<T = unknown>(value: unknown, partIndex: number): T[] {
+function selectRuntimePartActiveRoots(partType: RuntimePartType, activeRoots: string[]): string[] {
+  if (partType === "body" && activeRoots.includes("body")) {
+    return ["body"];
+  }
+  if ((partType === "head" || partType === "hair") && activeRoots.includes("face")) {
+    return ["face"];
+  }
+  if (activeRoots.length) {
+    return [activeRoots[0]];
+  }
+  return [partType === "body" ? "body" : "face"];
+}
+
+function filterRuntimeRecordsByActiveRoots<T extends { nodePath?: string | null; poseRoot?: string | null }>(
+  records: T[],
+  activeRoots: string[]
+): T[] {
+  const roots = new Set(activeRoots.map((root) => normalizeRootName(root)));
+  return records.filter((record) => {
+    const root = normalizeRootName(firstPathSegment(record.nodePath) ?? record.poseRoot);
+    return roots.has(root);
+  });
+}
+
+function filterColliderBindingsByActiveBones(
+  bindings: RuntimeColliderBinding[],
+  bones: RuntimeBone[]
+): RuntimeColliderBinding[] {
+  const activeBonePathIds = new Set(
+    bones
+      .map((bone) => bone.pathId)
+      .filter((pathId): pathId is number => typeof pathId === "number")
+  );
+  return bindings.filter((binding) =>
+    typeof binding.sourceSpringBonePathId !== "number" ||
+    activeBonePathIds.has(binding.sourceSpringBonePathId)
+  );
+}
+
+function filterManagerColliderCachesByActiveManagers(
+  caches: RuntimeManagerColliderCache[],
+  managers: RuntimeManager[]
+): RuntimeManagerColliderCache[] {
+  const activeManagerPathIds = new Set(
+    managers
+      .map((manager) => manager.pathId)
+      .filter((pathId): pathId is number => typeof pathId === "number")
+  );
+  return caches.filter((cache) =>
+    typeof cache.managerPathId !== "number" ||
+    activeManagerPathIds.has(cache.managerPathId)
+  );
+}
+
+function remapPrefabGraph(value: unknown, partIndex: number): RuntimePrefabGraph | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const graph = { ...value } as RuntimePrefabGraph;
+  graph.runtimePartIndex = partIndex;
+  graph.transforms = readRecordArray(value.transforms).map((entry) => {
+    const cloned = { ...entry, runtimePartIndex: partIndex } as RuntimePrefabTransform;
+    if (typeof cloned.pathId === "number") {
+      cloned.pathId = remapNumericId(cloned.pathId, partIndex);
+    }
+    if (typeof cloned.parentPathId === "number") {
+      cloned.parentPathId = remapNumericId(cloned.parentPathId, partIndex);
+    }
+    if (Array.isArray(cloned.childPathIds)) {
+      cloned.childPathIds = cloned.childPathIds.map((id) =>
+        typeof id === "number" ? remapNumericId(id, partIndex) : id
+      );
+    }
+    return cloned;
+  });
+  graph.monoBehaviours = readRecordArray(value.monoBehaviours).map((entry) => {
+    const cloned = { ...entry, runtimePartIndex: partIndex } as RuntimePrefabMonoBehaviour;
+    if (typeof cloned.pathId === "number") {
+      cloned.pathId = remapNumericId(cloned.pathId, partIndex);
+    }
+    return cloned;
+  });
+  return graph;
+}
+
+function withInferredSpringManagerBoneRefs(
+  managers: RuntimeManager[],
+  bones: RuntimeBone[],
+  managerColliderCaches: RuntimeManagerColliderCache[]
+) {
+  const bonesByManagerPathId = new Map<number, number[]>();
+  for (const manager of managers) {
+    const managerPath = manager.nodePath;
+    const inferredBonePathIds = bones
+      .filter((bone) => isSameOrDescendantRuntimePath(bone.nodePath, managerPath))
+      .map((bone) => bone.pathId)
+      .filter((pathId): pathId is number => typeof pathId === "number");
+    if (!inferredBonePathIds.length) {
+      continue;
+    }
+    if (!Array.isArray(manager.bonePathIds) || manager.bonePathIds.length === 0) {
+      manager.bonePathIds = inferredBonePathIds;
+    }
+    if (typeof manager.pathId === "number") {
+      bonesByManagerPathId.set(manager.pathId, inferredBonePathIds);
+    }
+  }
+
+  for (const cache of managerColliderCaches) {
+    if (Array.isArray(cache.springBonePathIds) && cache.springBonePathIds.length > 0) {
+      continue;
+    }
+    const inferredBonePathIds = typeof cache.managerPathId === "number"
+      ? bonesByManagerPathId.get(cache.managerPathId)
+      : undefined;
+    if (inferredBonePathIds?.length) {
+      cache.springBonePathIds = inferredBonePathIds;
+    }
+  }
+}
+
+function isSameOrDescendantRuntimePath(
+  childPath: string | null | undefined,
+  parentPath: string | null | undefined
+) {
+  if (!childPath || !parentPath) {
+    return false;
+  }
+  return childPath === parentPath || childPath.startsWith(`${parentPath}/`);
+}
+
+function cloneArrayWithPartPrefix<T = unknown>(
+  value: unknown,
+  partIndex: number,
+  partType: RuntimePartType
+): T[] {
   if (!Array.isArray(value)) {
     return [];
   }
@@ -822,6 +1122,8 @@ function cloneArrayWithPartPrefix<T = unknown>(value: unknown, partIndex: number
       return entry;
     }
     const cloned = { ...entry };
+    cloned.runtimePartIndex = partIndex;
+    cloned.runtimePartType = partType;
     if (typeof cloned.pathId === "number") {
       cloned.pathId = remapNumericId(cloned.pathId, partIndex);
     }
@@ -915,6 +1217,9 @@ function rebuildColliderBindings(parts: RemappedRuntimePart[]): RuntimeColliderB
   const currentBodyRoots = collidersByRoot(bodyColliders);
   return parts.flatMap((part) =>
     part.colliderBindings.map((binding) => {
+      if (binding.sourceKind === "deferred_body_colliderFlag" && part.partType !== "body") {
+        return rebuildDeferredColliderFlagBinding(binding, bodyColliders);
+      }
       if (binding.sourceKind !== "colliderFlag" || part.partType === "body" || !hasColliderRoots(currentBodyRoots)) {
         return binding;
       }
@@ -931,6 +1236,53 @@ function rebuildColliderBindings(parts: RemappedRuntimePart[]): RuntimeColliderB
       };
     })
   );
+}
+
+function rebuildDeferredColliderFlagBinding(
+  binding: RuntimeColliderBinding,
+  bodyColliders: RuntimeCollider[]
+): RuntimeColliderBinding {
+  const selected = selectBodyCollidersForColliderFlag(binding, bodyColliders);
+  return {
+    ...binding,
+    sourceKind: "colliderFlag",
+    originalSourceKind: "deferred_body_colliderFlag",
+    collidersByRoot: selected.byRoot,
+    defaultRoot: selected.defaultRoot,
+    colliders: selected.indexes,
+    sourceColliderPathIds: selected.indexes
+      .map((index) => bodyColliders.find((collider) => collider.index === index)?.pathId)
+      .filter((pathId): pathId is number => typeof pathId === "number"),
+    rebindReason: "viewer_composed_deferred_body_colliderFlag",
+  };
+}
+
+function selectBodyCollidersForColliderFlag(
+  binding: RuntimeColliderBinding,
+  bodyColliders: RuntimeCollider[]
+): { byRoot: Record<string, number[]>; defaultRoot: string; indexes: number[] } {
+  const matchedPrefixes = readStringArray(binding.matchedPrefixes);
+  const colliders = bodyColliders.filter((collider) =>
+    typeof collider.index === "number" &&
+    matchesColliderFlagPrefix(collider, matchedPrefixes)
+  );
+  const byRoot = collidersByRoot(colliders);
+  const defaultRoot = hasColliderRoots(byRoot)
+    ? firstColliderRoot(byRoot).root
+    : normalizeRootName(binding.defaultRoot ?? "body");
+  return {
+    byRoot,
+    defaultRoot,
+    indexes: byRoot[defaultRoot] ?? [],
+  };
+}
+
+function matchesColliderFlagPrefix(collider: RuntimeCollider, matchedPrefixes: string[]) {
+  if (!matchedPrefixes.length) {
+    return false;
+  }
+  const nodeName = readOptionalString(collider.nodeName);
+  return matchedPrefixes.some((prefix) => nodeName.startsWith(prefix));
 }
 
 function rebuildBindingDecisions(
@@ -969,7 +1321,10 @@ function rebuildBindingDecisions(
     });
 }
 
-function rebuildManagerColliderCaches(parts: RemappedRuntimePart[]): RuntimeManagerColliderCache[] {
+function rebuildManagerColliderCaches(
+  parts: RemappedRuntimePart[],
+  colliderBindings: RuntimeColliderBinding[]
+): RuntimeManagerColliderCache[] {
   const colliderByIndex = new Map(
     parts
       .flatMap((part) => part.colliders)
@@ -977,8 +1332,46 @@ function rebuildManagerColliderCaches(parts: RemappedRuntimePart[]): RuntimeMana
       .map((collider) => [collider.index as number, collider])
   );
   return parts.flatMap((part) =>
-    part.managerColliderCaches.map((cache) => filterManagerCache(cache, colliderByIndex))
+    part.managerColliderCaches.map((cache) =>
+      part.partType === "head" || part.partType === "hair"
+        ? rebuildHeadManagerColliderCache(cache, colliderBindings, colliderByIndex)
+        : filterManagerCache(cache, colliderByIndex)
+    )
   );
+}
+
+function rebuildHeadManagerColliderCache(
+  cache: RuntimeManagerColliderCache,
+  colliderBindings: RuntimeColliderBinding[],
+  colliderByIndex: ReadonlyMap<number, RuntimeCollider>
+): RuntimeManagerColliderCache {
+  const springBonePathIds = new Set(readNumberArray(cache.springBonePathIds));
+  const selectedIndexes = uniqueNumbers(
+    colliderBindings
+      .filter((binding) =>
+        typeof binding.sourceSpringBonePathId === "number" &&
+        springBonePathIds.has(binding.sourceSpringBonePathId) &&
+        binding.sourceKind === "colliderFlag"
+      )
+      .flatMap((binding) => readNumberArray(binding.colliders))
+      .filter((index) => colliderByIndex.has(index))
+  );
+  if (!selectedIndexes.length) {
+    return filterManagerCache(cache, colliderByIndex);
+  }
+  return {
+    ...cache,
+    sphereColliderIndexes: selectedIndexes.filter((index) =>
+      readOptionalString(colliderByIndex.get(index)?.scriptName).includes("Sphere")
+    ),
+    capsuleColliderIndexes: selectedIndexes.filter((index) =>
+      readOptionalString(colliderByIndex.get(index)?.scriptName).includes("Capsule")
+    ),
+    panelColliderIndexes: selectedIndexes.filter((index) =>
+      readOptionalString(colliderByIndex.get(index)?.scriptName).includes("Panel")
+    ),
+    reason: "viewer_composed_head_body_collider_cache",
+  };
 }
 
 function filterManagerCache(
@@ -1207,4 +1600,8 @@ function readNumberArray(value: unknown): number[] {
 
 function uniqueStrings(values: string[]) {
   return [...new Set(values)];
+}
+
+function uniqueNumbers(values: number[]) {
+  return [...new Set(values)].sort((left, right) => left - right);
 }

@@ -30,6 +30,7 @@ import {
 } from "../materials/sekaiLayerMaterial";
 import { loadGltfAnimations, loadGltfPart } from "./loadGltfPart";
 import {
+  type UtjSpringBoneDebugOptions,
   type UtjSpringBoneRuntimeSnapshot,
   type UtjSpringBoneTraceSnapshot,
 } from "./utjSpringBoneRuntimeAdapter";
@@ -51,17 +52,17 @@ import { runtimeRoleId } from "../parts/runtimePartComposer";
 const NECK_CONTACT_SHADOW_STRENGTH = 0.0;
 const DEFAULT_CAMERA_TARGET_SCALE = new THREE.Vector3(0.04835, 0.48222, 0.07241);
 const DEFAULT_CAMERA_OFFSET_SCALE = new THREE.Vector3(-0.08532, 0.12848, 1.93551);
-const ID5_DEBUG_CAMERA_TARGET_SCALE = new THREE.Vector3(
+const CAPTURE_CAMERA_TARGET_SCALE = new THREE.Vector3(
   -0.032911392405063286,
   0.4893037974683544,
   0.06841772151898734
 );
-const ID5_DEBUG_CAMERA_OFFSET_SCALE = new THREE.Vector3(
+const CAPTURE_CAMERA_OFFSET_SCALE = new THREE.Vector3(
   -0.08468354430379746,
   0.270253164556962,
   1.920886075949367
 );
-const ID5_DEBUG_CAMERA_LATERAL_SHIFT_SCALE = -0.0245;
+const CAPTURE_CAMERA_LATERAL_SHIFT_SCALE = -0.0245;
 const CHARACTER_EYE_STENCIL_BIT = 0x01;
 const CHARACTER_EYELASH_STENCIL_BIT = 0x02;
 const CHARACTER_EYEBROW_STENCIL_BIT = 0x04;
@@ -86,7 +87,7 @@ const FACE_SHADOW_HORIZONTAL_EPSILON = 0.00001;
 type SpringRuntimeController = UnityPrefabSpringRuntime;
 
 export type PjskPresentationMode = "interactive" | "capture";
-export type PjskCameraPreset = "default" | "id5-debug";
+export type PjskCameraPreset = "default" | "capture";
 
 export type PjskEngineOptions = {
   container: HTMLElement;
@@ -114,6 +115,26 @@ export type HarukiCaptureRolePartsRequest = {
   headOptionalCostume3dId?: number | null;
   imageId?: string;
   phase?: number;
+  warmupFrames?: number;
+  warmupMode?: "animation" | "runtime";
+  cameraPreset?: PjskCameraPreset;
+  traceUtjBones?: string[];
+  traceUtjMaxEvents?: number;
+  springDebugBones?: string[];
+  springDebugAllOffsets?: boolean;
+};
+
+export type HarukiPrepareCaptureFrameRequest = {
+  phase?: number;
+  clip?: "motion" | "motion_loop";
+  warmupMs?: number;
+  warmupFrames?: number;
+  warmupMode?: "animation" | "runtime";
+  cameraPreset?: PjskCameraPreset;
+  traceUtjBones?: string[];
+  traceUtjMaxEvents?: number;
+  springDebugBones?: string[];
+  springDebugAllOffsets?: boolean;
 };
 
 export type HarukiCaptureRolePartsResult = {
@@ -128,6 +149,7 @@ export type HarukiEngineSnapshots = {
   springBone: SpringBoneRuntimeSnapshot;
   camera: RuntimeCameraDebug;
   runtimeDebug: RuntimeDebugSnapshot;
+  utjSpringBoneTrace?: UtjSpringBoneTraceSnapshot | null;
 };
 
 export type PartImportMode = "glb" | "proxy";
@@ -607,6 +629,7 @@ type RuntimePrefabTransformSource = {
   name?: string | null;
   transformPath?: string | null;
   poseRoot?: string | null;
+  runtimePartIndex?: number;
   parentPathId?: number | null;
   childPathIds?: number[];
   localPosition?: {
@@ -2142,6 +2165,7 @@ function buildUnityPrefabSourceGraph(
       const node = new THREE.Object3D();
       node.name = transform.name ?? transform.transformPath.split("/").pop() ?? `path_${transform.pathId}`;
       node.userData.pjskTransformPath = transform.transformPath;
+      node.userData.pjskRuntimePartIndex = transform.runtimePartIndex;
       node.userData.pjskPoseRoot = transform.poseRoot ?? null;
       node.position.copy(convertUnityPositionToThree(
         readUnityVector3(transform.localPosition, new THREE.Vector3())
@@ -3774,6 +3798,7 @@ export class Haruki3DEngine {
     this.currentBodyAsset = characterAsset.bodyAsset;
     this.currentHeadAsset = characterAsset.headAsset;
     this.currentImportIsCombined = true;
+    this.applyCharacterHeight(characterAsset.bodyAsset.characterHeightMeters ?? this.characterHeight);
     const loaded = await this.loadCombinedCharacterAsset(characterAsset);
 
     if (revision !== this.importRevision) {
@@ -3862,7 +3887,9 @@ export class Haruki3DEngine {
         this.currentRuntimeExtension,
         runtimeRoot
       );
-      this.currentSpringRuntime = this.createSpringRuntime(runtimeRoot);
+      this.currentSpringRuntime = this.createSpringRuntime(
+        this.currentPrefabSourceGraph?.root ?? runtimeRoot
+      );
       this.currentPrefabHeadFollowConstraint = this.currentPrefabSourceGraph
         ? null
         : this.createPrefabHeadFollowConstraint(loaded.root);
@@ -4443,11 +4470,11 @@ export class Haruki3DEngine {
     this.cameraDebugChangeCallback = callback;
   }
 
-  getSpringBoneSnapshot(): SpringBoneRuntimeSnapshot {
+  getSpringBoneSnapshot(debugOptions?: UtjSpringBoneDebugOptions): SpringBoneRuntimeSnapshot {
     return summarizeSpringBoneMetadata(
       this.currentRuntimeExtension,
       Boolean(this.currentVrmSpringBoneManager),
-      this.currentSpringRuntime?.getSnapshot(this.isSpringRuntimeEnabled()) ?? null
+      this.currentSpringRuntime?.getSnapshot(this.isSpringRuntimeEnabled(), debugOptions) ?? null
     );
   }
 
@@ -4829,19 +4856,78 @@ export class Haruki3DEngine {
       origin: "custom",
     };
     const combinedCharacter = await this.setCustomSelection(selection);
-    this.setPresentationMode("capture");
-    this.setSpringRuntimeMode("unity-prefab");
-    this.seekAnimationLoopPhase(request.phase ?? 0.5);
-    this.stepCaptureFrame(0, false);
-    this.frameCurrentCharacterForCapture();
-    this.applyCameraPreset("id5-debug");
-    this.shiftCameraRight(1);
-    this.renderFrame();
+    await this.prepareCaptureFrame({
+      phase: request.phase,
+      clip: "motion_loop",
+      warmupFrames: request.warmupFrames,
+      warmupMode: request.warmupMode,
+      cameraPreset: request.cameraPreset,
+      traceUtjBones: request.traceUtjBones,
+      traceUtjMaxEvents: request.traceUtjMaxEvents,
+      springDebugBones: request.springDebugBones,
+      springDebugAllOffsets: request.springDebugAllOffsets,
+    });
     return {
       selection,
       combinedCharacter,
-      snapshots: this.getSnapshots(),
+      snapshots: this.getSnapshots({
+        springDebugBones: request.springDebugBones,
+        springDebugAllOffsets: request.springDebugAllOffsets,
+      }),
     };
+  }
+
+  async prepareCaptureFrame(request: HarukiPrepareCaptureFrameRequest = {}) {
+    this.setPresentationMode("capture");
+    this.setSpringRuntimeMode("unity-prefab");
+    this.setUtjSpringBoneTraceFilters(
+      request.traceUtjBones ?? [],
+      request.traceUtjMaxEvents
+    );
+    this.setAnimationPaused(true);
+
+    const phase = THREE.MathUtils.clamp(
+      Number.isFinite(request.phase) ? request.phase! : 0.5,
+      0,
+      1
+    );
+    const clip = request.clip ?? "motion_loop";
+    const warmupFrames = Math.max(Math.trunc(request.warmupFrames ?? 0), 0);
+    const warmupMs = Math.max(Math.trunc(request.warmupMs ?? 0), 0);
+    const warmupMode = request.warmupMode ?? "animation";
+    const advanceWarmupAnimation = warmupMode === "animation";
+    const duration = Math.max(this.currentAnimationDuration, 0);
+    const seekTargetPhase = (targetPhase: number) => clip === "motion"
+      ? this.seekAnimationPhase(targetPhase)
+      : this.seekAnimationLoopPhase(targetPhase);
+    const startPhase = advanceWarmupAnimation && warmupFrames > 0 && duration > 0
+      ? THREE.MathUtils.euclideanModulo(
+        phase - warmupFrames / (60 * duration),
+        1
+      )
+      : phase;
+
+    seekTargetPhase(startPhase);
+
+    if (warmupFrames > 0) {
+      this.setAnimationPaused(!advanceWarmupAnimation);
+      for (let index = 0; index < warmupFrames; index += 1) {
+        this.stepCaptureFrame(1 / 60, advanceWarmupAnimation);
+      }
+      this.setAnimationPaused(true);
+    } else if (warmupMs > 0) {
+      this.setAnimationPaused(warmupMode === "runtime");
+      await new Promise<void>((resolve) => {
+        window.setTimeout(resolve, warmupMs);
+      });
+      this.setAnimationPaused(true);
+    }
+
+    this.stepCaptureFrame(0, false);
+    this.frameCurrentCharacterForCapture();
+    this.applyCameraPreset(request.cameraPreset ?? "capture");
+    this.shiftCameraRight(1);
+    this.renderFrame();
   }
 
   private async applyCustomRoleDefaultMotion(
@@ -4928,13 +5014,14 @@ export class Haruki3DEngine {
     this.applyAnimationPlaybackSettings();
   }
 
-  getSnapshots(): HarukiEngineSnapshots {
+  getSnapshots(debugOptions?: UtjSpringBoneDebugOptions): HarukiEngineSnapshots {
     return {
       animation: this.getAnimationSnapshot(),
       faceMotion: this.getFaceMotionSnapshot(),
-      springBone: this.getSpringBoneSnapshot(),
+      springBone: this.getSpringBoneSnapshot(debugOptions),
       camera: this.getCameraDebugSnapshot(),
       runtimeDebug: this.getRuntimeDebugSnapshot(),
+      utjSpringBoneTrace: this.getUtjSpringBoneTraceSnapshot(),
     };
   }
 
@@ -5424,14 +5511,14 @@ export class Haruki3DEngine {
     this.controls.update();
   }
 
-  applyCameraPreset(preset: "default" | "id5-debug") {
+  applyCameraPreset(preset: PjskCameraPreset) {
     const targetScale =
-      preset === "id5-debug"
-        ? ID5_DEBUG_CAMERA_TARGET_SCALE
+      preset === "capture"
+        ? CAPTURE_CAMERA_TARGET_SCALE
         : DEFAULT_CAMERA_TARGET_SCALE;
     const offsetScale =
-      preset === "id5-debug"
-        ? ID5_DEBUG_CAMERA_OFFSET_SCALE
+      preset === "capture"
+        ? CAPTURE_CAMERA_OFFSET_SCALE
         : DEFAULT_CAMERA_OFFSET_SCALE;
     const target = targetScale.clone().multiplyScalar(this.characterHeight);
     const offset = offsetScale.clone().multiplyScalar(this.characterHeight);
@@ -5449,7 +5536,7 @@ export class Haruki3DEngine {
     const forward = this.controls.target.clone().sub(this.camera.position).normalize();
     const up = new THREE.Vector3(0, 1, 0);
     const right = new THREE.Vector3().crossVectors(forward, up).normalize();
-    const shift = right.multiplyScalar(ID5_DEBUG_CAMERA_LATERAL_SHIFT_SCALE * amount * this.characterHeight);
+    const shift = right.multiplyScalar(CAPTURE_CAMERA_LATERAL_SHIFT_SCALE * amount * this.characterHeight);
     this.controls.target.add(shift);
     this.camera.position.add(shift);
     this.controls.update();

@@ -50,6 +50,16 @@ export function resolveCaptureServerOptions(config, env = process.env) {
     defaultHeight: intAtLeast(env.HARUKI_CAPTURE_HEIGHT, capture.height, 1000, 320),
     defaultScale: clampNumber(env.HARUKI_CAPTURE_SCALE, capture.scale, 1, 1, 2),
     defaultTimeoutMs: intAtLeast(env.HARUKI_CAPTURE_TIMEOUT_MS, capture.timeoutMs, 45000, 5000),
+    defaultPhase: numberValue(env.HARUKI_CAPTURE_PHASE, capture.phase, 0.5),
+    defaultClip: stringValue(env.HARUKI_CAPTURE_CLIP, capture.clip, "motion_loop"),
+    defaultWarmupMs: intAtLeast(env.HARUKI_CAPTURE_WARMUP_MS, capture.warmupMs, 0, 0),
+    defaultWarmupFrames: intAtLeast(env.HARUKI_CAPTURE_WARMUP_FRAMES, capture.warmupFrames, 0, 0),
+    defaultWarmupMode: stringValue(env.HARUKI_CAPTURE_WARMUP_MODE, capture.warmupMode, "animation"),
+    defaultSpringRuntimeMode: springRuntimeMode(
+      env.HARUKI_SPRING_RUNTIME_MODE,
+      capture.springRuntimeMode
+    ),
+    defaultCameraPreset: cameraPreset(env.HARUKI_CAMERA_PRESET, capture.cameraPreset),
   };
 }
 
@@ -90,6 +100,10 @@ function springRuntimeMode(primary, secondary) {
 }
 
 function cameraPreset(primary, secondary) {
-  const value = stringValue(primary, secondary, "id5-debug");
-  return value === "default" ? "default" : "id5-debug";
+  const value = stringValue(primary, secondary, "capture");
+  return normalizeCameraPreset(value);
+}
+
+function normalizeCameraPreset(value) {
+  return value === "default" ? "default" : "capture";
 }

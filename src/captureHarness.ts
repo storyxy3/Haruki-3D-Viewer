@@ -49,7 +49,7 @@ const engine = new Haruki3DEngine({
   container: root,
   initialLight: { ...previewLightDefaults },
   presentationMode: "capture",
-  cameraPreset: "id5-debug",
+  cameraPreset: "capture",
   autoRender: false,
   manageResize: false,
 });
@@ -175,7 +175,11 @@ function readSpringRuntimeMode(params: URLSearchParams): SpringRuntimeMode {
 }
 
 function readCameraPreset(params: URLSearchParams): PjskCameraPreset {
-  return params.get("cameraPreset") === "default" ? "default" : "id5-debug";
+  return normalizeCameraPreset(params.get("cameraPreset"));
+}
+
+function normalizeCameraPreset(value: string | null): PjskCameraPreset {
+  return value === "default" ? "default" : "capture";
 }
 
 function isCharacterYawMode(value: string | null): value is CharacterYawMode {
@@ -225,13 +229,24 @@ getCaptureWindow().__HARUKI_CAPTURE_REQUEST__ = async (
     engine.setViewportSize(root.clientWidth, root.clientHeight);
     const result = await engine.captureRoleParts({
       ...request,
-      phase: request.phase ?? 0.5,
+      phase: request.phase ?? config.phase,
+      warmupFrames: request.warmupFrames ?? config.warmupFrames,
+      warmupMode: request.warmupMode ?? config.warmupMode,
+      cameraPreset: request.cameraPreset ?? config.cameraPreset,
     });
+    const snapshots = {
+      ...result.snapshots,
+      utjSpringBoneTrace: engine.getUtjSpringBoneTraceSnapshot(),
+    };
+    const resultWithTrace = {
+      ...result,
+      snapshots,
+    };
     await waitForAnimationFrames(2);
-    getCaptureWindow().__PJSK_CAPTURE_SNAPSHOT__ = result.snapshots;
+    getCaptureWindow().__PJSK_CAPTURE_SNAPSHOT__ = snapshots;
     getCaptureWindow().__PJSK_CAPTURE_READY__ = true;
     document.body.dataset.captureReady = "true";
-    return result;
+    return resultWithTrace;
   } catch (error) {
     setCaptureError(error);
     throw error;
@@ -252,34 +267,16 @@ function waitForAnimationFrames(count: number) {
 }
 
 async function prepareCaptureFrame(config: CaptureConfig) {
-  engine.setAnimationPaused(true);
-  const seekTargetPhase = () => config.clip === "motion"
-    ? engine.seekAnimationPhase(config.phase)
-    : engine.seekAnimationLoopPhase(config.phase);
-
-  seekTargetPhase();
-
-  if (config.warmupFrames > 0) {
-    const advanceAnimation = config.warmupMode === "animation";
-    engine.setAnimationPaused(!advanceAnimation);
-    for (let index = 0; index < config.warmupFrames; index += 1) {
-      engine.stepCaptureFrame(1 / 60, advanceAnimation);
-    }
-    engine.setAnimationPaused(true);
-  } else if (config.warmupMs > 0) {
-    engine.setAnimationPaused(config.warmupMode === "runtime");
-    await new Promise<void>((resolve) => {
-      window.setTimeout(resolve, config.warmupMs);
-    });
-    engine.setAnimationPaused(true);
-  }
-
-  seekTargetPhase();
-  engine.stepCaptureFrame(0, false);
-  engine.frameCurrentCharacterForCapture();
-  engine.applyCameraPreset(config.cameraPreset);
-  engine.shiftCameraRight(1);
-  engine.renderFrame();
+  await engine.prepareCaptureFrame({
+    phase: config.phase,
+    clip: config.clip,
+    warmupMs: config.warmupMs,
+    warmupFrames: config.warmupFrames,
+    warmupMode: config.warmupMode,
+    cameraPreset: config.cameraPreset,
+    traceUtjBones: config.utjTraceBones,
+    traceUtjMaxEvents: config.utjTraceMaxEvents,
+  });
   await waitForAnimationFrames(3);
   const snapshots = engine.getSnapshots();
   getCaptureWindow().__PJSK_CAPTURE_SNAPSHOT__ = {
@@ -315,11 +312,11 @@ async function bootstrapCapture() {
     if (config.characterYawMode) {
       engine.setCharacterYawDegrees(characterYawDegreesByMode[config.characterYawMode]);
     }
+    await ensureCaptureRuntimePackage(config);
     engine.setUtjSpringBoneTraceFilters(
       config.utjTraceBones,
       config.utjTraceMaxEvents
     );
-    await ensureCaptureRuntimePackage(config);
     if (config.fullRuntimeOnly) {
       await prepareCaptureFrame(config);
     } else {

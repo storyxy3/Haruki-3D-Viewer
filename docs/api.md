@@ -23,7 +23,7 @@ const engine = new Haruki3DEngine({
   container,
   initialLight: { ...previewLightDefaults },
   presentationMode: "interactive",
-  cameraPreset: "id5-debug",
+  cameraPreset: "capture",
 });
 
 await engine.loadRuntimePackage({ baseUrl: "/assets/runtime/001/" });
@@ -37,7 +37,7 @@ Constructor options:
 - `container`: DOM element that receives the WebGL canvas.
 - `initialLight`: initial scene light state.
 - `presentationMode`: `"interactive"` or `"capture"`.
-- `cameraPreset`: `"default"` or `"id5-debug"`.
+- `cameraPreset`: `"default"` or `"capture"`. The legacy `"id5-debug"` value is accepted by CLI/config callers as an alias for `"capture"`.
 - `autoRender`: starts the internal render loop when true.
 - `manageResize`: installs resize handling when true.
 
@@ -98,7 +98,7 @@ const result = await engine.captureRoleParts(request);
 `captureRoleParts` fixes the capture defaults used by the current pipeline:
 
 - animation: `motion_loop` at phase `0.5`
-- camera: `id5-debug` plus the current right-shift preset
+- camera: height-scaled `capture` plus the current right-shift preset
 - SpringBone: `unity-prefab`
 - output state: capture presentation mode
 
@@ -119,7 +119,7 @@ engine.setSpringRuntimeMode("unity-prefab");
 engine.seekAnimationLoopPhase(0.5);
 engine.stepCaptureFrame(1 / 60, true);
 engine.frameCurrentCharacterForCapture();
-engine.applyCameraPreset("id5-debug");
+engine.applyCameraPreset("capture");
 engine.renderFrame();
 ```
 
@@ -153,7 +153,7 @@ The service keeps one Chromium page and one engine instance warm, so repeated re
 Camera and presentation are part of the engine API because capture and external viewers need identical output:
 
 ```ts
-engine.applyCameraPreset("id5-debug");
+engine.applyCameraPreset("capture");
 engine.shiftCameraRight(1);
 engine.setViewportSize(1400, 1000);
 engine.setPresentationMode("capture");

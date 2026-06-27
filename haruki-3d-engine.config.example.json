@@ -9,7 +9,7 @@
     "phase": 0.5,
     "clip": "motion_loop",
     "springRuntimeMode": "unity-prefab",
-    "cameraPreset": "id5-debug"
+    "cameraPreset": "capture"
   },
   "chromium": {
     "executable": "chromium"

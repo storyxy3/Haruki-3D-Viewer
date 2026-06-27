@@ -107,10 +107,10 @@ export function parseArgs(argv) {
       options.springRuntimeMode = mode === "webgl-utj" ? "unity-prefab" : mode;
     } else if (arg === "--camera-preset") {
       const preset = readValue();
-      if (!["default", "id5-debug"].includes(preset)) {
+      if (!["default", "capture", "id5-debug"].includes(preset)) {
         throw new Error(`Invalid --camera-preset ${preset}`);
       }
-      options.cameraPreset = preset;
+      options.cameraPreset = normalizeCameraPreset(preset);
     } else if (arg === "--utj-springbone") {
       options.springRuntimeMode = "unity-prefab";
     } else if (arg === "--no-utj-springbone") {
@@ -206,6 +206,10 @@ export function parseArgs(argv) {
   return options;
 }
 
+function normalizeCameraPreset(value) {
+  return value === "default" ? "default" : "capture";
+}
+
 function printHelp() {
   console.log(`Usage:
   npm run capture:runtime -- --input <converter-output> --out <capture.png>
@@ -229,7 +233,7 @@ Options:
                        Render isolation/debug mode. Default: normal
   --spring-runtime-mode <mode>
                        Spring runtime: off, unity-prefab. Default: unity-prefab
-  --camera-preset <id> Camera preset: default, id5-debug. Default: id5-debug
+  --camera-preset <id> Camera preset: default, capture. Default: capture
   --utj-springbone     Compatibility alias for --spring-runtime-mode unity-prefab
   --no-utj-springbone  Compatibility alias for --spring-runtime-mode off
   --trace-utj-bone <s> Trace spring stages for bones whose name/path contains this text
