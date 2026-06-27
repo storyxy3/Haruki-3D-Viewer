@@ -799,18 +799,71 @@ function getPartRuntimeSetup(runtime: PartRuntimePackage): RuntimeSetup {
 function remapRuntimePart(runtime: PartRuntimePackage, partIndex: number): RemappedRuntimePart {
   const setup = getPartRuntimeSetup(runtime);
   const partType = normalizeRuntimePartType(runtime.part.partType);
+  const managers = cloneArrayWithPartPrefix(setup.managers, partIndex) as RuntimeManager[];
+  const bones = cloneArrayWithPartPrefix(setup.bones, partIndex) as RuntimeBone[];
+  const managerColliderCaches = cloneArrayWithPartPrefix(
+    setup.managerColliderCaches,
+    partIndex
+  ) as RuntimeManagerColliderCache[];
+  withInferredSpringManagerBoneRefs(managers, bones, managerColliderCaches);
   return {
     runtime,
     partIndex,
     partType,
     setup,
-    managers: cloneArrayWithPartPrefix(setup.managers, partIndex) as RuntimeManager[],
-    bones: cloneArrayWithPartPrefix(setup.bones, partIndex) as RuntimeBone[],
+    managers,
+    bones,
     colliders: cloneArrayWithPartPrefix(setup.colliders, partIndex) as RuntimeCollider[],
     colliderBindings: cloneArrayWithPartPrefix(setup.colliderBindings, partIndex) as RuntimeColliderBinding[],
-    managerColliderCaches: cloneArrayWithPartPrefix(setup.managerColliderCaches, partIndex) as RuntimeManagerColliderCache[],
+    managerColliderCaches,
     activeRoots: readStringArray(setup.activeRootProfile?.activeRoots),
   };
+}
+
+function withInferredSpringManagerBoneRefs(
+  managers: RuntimeManager[],
+  bones: RuntimeBone[],
+  managerColliderCaches: RuntimeManagerColliderCache[]
+) {
+  const bonesByManagerPathId = new Map<number, number[]>();
+  for (const manager of managers) {
+    const managerPath = manager.nodePath;
+    const inferredBonePathIds = bones
+      .filter((bone) => isSameOrDescendantRuntimePath(bone.nodePath, managerPath))
+      .map((bone) => bone.pathId)
+      .filter((pathId): pathId is number => typeof pathId === "number");
+    if (!inferredBonePathIds.length) {
+      continue;
+    }
+    if (!Array.isArray(manager.bonePathIds) || manager.bonePathIds.length === 0) {
+      manager.bonePathIds = inferredBonePathIds;
+    }
+    if (typeof manager.pathId === "number") {
+      bonesByManagerPathId.set(manager.pathId, inferredBonePathIds);
+    }
+  }
+
+  for (const cache of managerColliderCaches) {
+    if (Array.isArray(cache.springBonePathIds) && cache.springBonePathIds.length > 0) {
+      continue;
+    }
+    const inferredBonePathIds = typeof cache.managerPathId === "number"
+      ? bonesByManagerPathId.get(cache.managerPathId)
+      : undefined;
+    if (inferredBonePathIds?.length) {
+      cache.springBonePathIds = inferredBonePathIds;
+    }
+  }
+}
+
+function isSameOrDescendantRuntimePath(
+  childPath: string | null | undefined,
+  parentPath: string | null | undefined
+) {
+  if (!childPath || !parentPath) {
+    return false;
+  }
+  return childPath === parentPath || childPath.startsWith(`${parentPath}/`);
 }
 
 function cloneArrayWithPartPrefix<T = unknown>(value: unknown, partIndex: number): T[] {

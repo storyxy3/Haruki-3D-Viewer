@@ -262,3 +262,27 @@ test("composed part runtime declares body-head assembly for motion retarget supp
   assert.match(engineSource, /hasUnityBodyHeadAssembly\(extension\)/);
   assert.match(engineSource, /isFaceAssemblyBridgeMotionTarget/);
 });
+
+test("unity prefab spring runtime is created from prefab source graph on initial load", () => {
+  const engineSource = fs.readFileSync(
+    path.join(repoRoot, "src/engine/Haruki3DEngine.ts"),
+    "utf8"
+  );
+
+  assert.match(
+    engineSource,
+    /this\.currentSpringRuntime = this\.createSpringRuntime\(\s*this\.currentPrefabSourceGraph\?\.root \?\? runtimeRoot\s*\)/
+  );
+});
+
+test("part composer infers missing spring manager bone references from part-local paths", () => {
+  const composerSource = fs.readFileSync(
+    path.join(repoRoot, "src/parts/runtimePartComposer.ts"),
+    "utf8"
+  );
+
+  assert.match(composerSource, /withInferredSpringManagerBoneRefs/);
+  assert.match(composerSource, /isSameOrDescendantRuntimePath/);
+  assert.match(composerSource, /manager\.bonePathIds = inferredBonePathIds/);
+  assert.match(composerSource, /cache\.springBonePathIds = inferredBonePathIds/);
+});

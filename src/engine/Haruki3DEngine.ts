@@ -3862,7 +3862,9 @@ export class Haruki3DEngine {
         this.currentRuntimeExtension,
         runtimeRoot
       );
-      this.currentSpringRuntime = this.createSpringRuntime(runtimeRoot);
+      this.currentSpringRuntime = this.createSpringRuntime(
+        this.currentPrefabSourceGraph?.root ?? runtimeRoot
+      );
       this.currentPrefabHeadFollowConstraint = this.currentPrefabSourceGraph
         ? null
         : this.createPrefabHeadFollowConstraint(loaded.root);
