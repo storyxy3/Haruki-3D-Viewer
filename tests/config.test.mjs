@@ -136,6 +136,41 @@ test("role parts capture reuses full runtime capture frame preparation", () => {
   assert.equal(prepareCaptureFrameBody.match(/seekTargetPhase\(/g)?.length, 1);
 });
 
+test("capture camera preset is generic, height-scaled, and keeps id5-debug as a legacy alias", () => {
+  const runtimeOptions = parseArgs([
+    "--input", "/tmp/input",
+    "--out", "/tmp/out.png",
+    "--camera-preset", "id5-debug",
+  ]);
+  const configOptions = resolveCaptureRuntimeOptions({ capture: { cameraPreset: "id5-debug" } }, {});
+  const harnessSource = fs.readFileSync(
+    path.join(repoRoot, "src/captureHarness.ts"),
+    "utf8"
+  );
+  const engineSource = fs.readFileSync(
+    path.join(repoRoot, "src/engine/Haruki3DEngine.ts"),
+    "utf8"
+  );
+
+  assert.equal(runtimeOptions.cameraPreset, "capture");
+  assert.equal(configOptions.cameraPreset, "capture");
+  assert.match(engineSource, /export type PjskCameraPreset = "default" \| "capture";/);
+  assert.match(engineSource, /const CAPTURE_CAMERA_TARGET_SCALE = new THREE\.Vector3/);
+  assert.match(engineSource, /const CAPTURE_CAMERA_OFFSET_SCALE = new THREE\.Vector3/);
+  assert.match(engineSource, /const CAPTURE_CAMERA_LATERAL_SHIFT_SCALE = -0\.0245;/);
+  assert.doesNotMatch(engineSource, /ID5_DEBUG_CAMERA_/);
+  assert.match(
+    engineSource,
+    /const target = targetScale\.clone\(\)\.multiplyScalar\(this\.characterHeight\);/
+  );
+  assert.match(
+    engineSource,
+    /const offset = offsetScale\.clone\(\)\.multiplyScalar\(this\.characterHeight\);/
+  );
+  assert.match(harnessSource, /cameraPreset: "capture"/);
+  assert.match(harnessSource, /return normalizeCameraPreset\(params\.get\("cameraPreset"\)\);/);
+});
+
 test("combined runtime imports apply character height before capture camera framing", () => {
   const engineSource = fs.readFileSync(
     path.join(repoRoot, "src/engine/Haruki3DEngine.ts"),
