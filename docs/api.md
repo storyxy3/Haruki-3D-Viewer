@@ -140,11 +140,13 @@ content-type: application/json
   "headOptionalCostume3dId": null,
   "width": 700,
   "height": 500,
-  "scale": 2
+  "scale": 2,
+  "cacheMode": "persistent"
 }
 ```
 
 It writes `/data/captures/<imageId>.png` and serves it back from `GET /captures/<imageId>.png`.
+Use `cacheMode: "temporary"` plus optional `ttlSeconds` for free-form combinations that should not enter the long-lived preview cache; temporary image ids are written with a `tmp_` prefix and are removed by the capture GC after the configured TTL.
 `width` and `height` control the capture framing in CSS pixels. `scale` controls output DPR from `1` to `2`; use `scale: 2` for thumbnails that will be inspected or resized by downstream UI.
 The service keeps one Chromium page and one engine instance warm, so repeated requests do not create per-request browser profile or cache directories. `/healthz` returns `ready` and `restarting` flags for startup and crash-recovery checks.
 

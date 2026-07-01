@@ -27,7 +27,9 @@ test("loads engine config JSON and applies capture runtime CLI overrides", () =>
       phase: 0.25,
       clip: "motion_loop",
       springRuntimeMode: "unity-prefab",
-      cameraPreset: "capture"
+      cameraPreset: "capture",
+      tempTtl: "30m",
+      gcInterval: "15m"
     },
     chromium: {
       executable: "/usr/bin/chromium"
@@ -61,6 +63,8 @@ test("loads engine config JSON and applies capture runtime CLI overrides", () =>
   assert.equal(server.defaultClip, "motion_loop");
   assert.equal(server.defaultSpringRuntimeMode, "unity-prefab");
   assert.equal(server.defaultCameraPreset, "capture");
+  assert.equal(server.tempCaptureTtlMs, 30 * 60 * 1000);
+  assert.equal(server.captureGCIntervalMs, 15 * 60 * 1000);
 });
 
 test("persistent capture server propagates config defaults into role parts capture", () => {
@@ -116,6 +120,27 @@ test("role parts capture supports warmup frames for spring runtime settling", ()
   assert.match(engineSource, /warmupMode\?: "animation" \| "runtime"/);
   assert.match(engineSource, /for \(let index = 0; index < warmupFrames; index \+= 1\)/);
   assert.match(engineSource, /this\.stepCaptureFrame\(1 \/ 60, advanceWarmupAnimation\)/);
+});
+
+test("capture server supports temporary cache mode and GC configuration", () => {
+  const server = resolveCaptureServerOptions({}, {
+    HARUKI_CAPTURE_TEMP_TTL: "6h",
+    HARUKI_CAPTURE_GC_INTERVAL: "1h",
+  });
+  const serverSource = fs.readFileSync(
+    path.join(repoRoot, "capture-server.mjs"),
+    "utf8"
+  );
+
+  assert.equal(server.tempCaptureTtlMs, 6 * 60 * 60 * 1000);
+  assert.equal(server.captureGCIntervalMs, 60 * 60 * 1000);
+  assert.match(serverSource, /cacheMode = input\.cacheMode === "temporary" \? "temporary" : "persistent"/);
+  assert.match(serverSource, /if \(imageId === ""\)/);
+  assert.match(serverSource, /if \(cacheMode === "temporary" && !imageId\.startsWith\("tmp_"\)\)/);
+  assert.match(serverSource, /const expiresAt = Date\.now\(\) \+ request\.ttlMs/);
+  assert.match(serverSource, /fs\.utimesSync\(outputPath, gcRelativeMtime, gcRelativeMtime\)/);
+  assert.match(serverSource, /cleanupExpiredTemporaryCaptures\(Date\.now\(\)\)/);
+  assert.ok(serverSource.includes('/^tmp_[A-Za-z0-9._-]+\\.png$/'));
 });
 
 test("role parts capture reuses full runtime capture frame preparation", () => {

@@ -60,6 +60,8 @@ export function resolveCaptureServerOptions(config, env = process.env) {
       capture.springRuntimeMode
     ),
     defaultCameraPreset: cameraPreset(env.HARUKI_CAMERA_PRESET, capture.cameraPreset),
+    tempCaptureTtlMs: durationMsAtLeast(env.HARUKI_CAPTURE_TEMP_TTL, capture.tempTtl, "6h", 0),
+    captureGCIntervalMs: durationMsAtLeast(env.HARUKI_CAPTURE_GC_INTERVAL, capture.gcInterval, "1h", 0),
   };
 }
 
@@ -92,6 +94,36 @@ function intAtLeast(primary, secondary, fallback, min) {
 
 function clampNumber(primary, secondary, fallback, min, max) {
   return Math.min(Math.max(numberValue(primary, secondary, fallback) || fallback, min), max);
+}
+
+function durationMsAtLeast(primary, secondary, fallback, min) {
+  const value = durationMsValue(primary, secondary, fallback);
+  return Math.max(Math.trunc(value) || durationMsValue(fallback), min);
+}
+
+function durationMsValue(...values) {
+  for (const value of values) {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+    if (typeof value !== "string" || !value.trim()) {
+      continue;
+    }
+    const trimmed = value.trim();
+    const numeric = Number(trimmed);
+    if (Number.isFinite(numeric)) {
+      return numeric;
+    }
+    const match = trimmed.match(/^(\d+(?:\.\d+)?)(ms|s|m|h)$/i);
+    if (!match) {
+      continue;
+    }
+    const amount = Number(match[1]);
+    const unit = match[2].toLowerCase();
+    const multiplier = unit === "h" ? 3600000 : unit === "m" ? 60000 : unit === "s" ? 1000 : 1;
+    return amount * multiplier;
+  }
+  return 0;
 }
 
 function springRuntimeMode(primary, secondary) {

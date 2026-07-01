@@ -32,6 +32,8 @@ const {
   defaultWarmupMode,
   defaultSpringRuntimeMode,
   defaultCameraPreset,
+  tempCaptureTtlMs,
+  captureGCIntervalMs,
 } = resolveCaptureServerOptions(engineConfig);
 
 const mimeByExtension = new Map([
@@ -129,7 +131,14 @@ function readRequestJson(req) {
 }
 
 function validateCaptureRequest(input) {
-  const imageId = String(input.imageId ?? "");
+  const cacheMode = input.cacheMode === "temporary" ? "temporary" : "persistent";
+  let imageId = String(input.imageId ?? "");
+  if (imageId === "") {
+    throw new Error("imageId must match /^[A-Za-z0-9._-]+$/.");
+  }
+  if (cacheMode === "temporary" && !imageId.startsWith("tmp_")) {
+    imageId = `tmp_${imageId}`;
+  }
   if (!/^[A-Za-z0-9._-]+$/.test(imageId) || imageId === "." || imageId === "..") {
     throw new Error("imageId must match /^[A-Za-z0-9._-]+$/.");
   }
@@ -150,10 +159,19 @@ function validateCaptureRequest(input) {
     .map((value) => value.trim())
     .filter(Boolean);
   const readBoolean = (value) => value === true || value === "true" || value === 1 || value === "1";
+  const readTtlMs = (value) => {
+    const seconds = Number(value);
+    if (!Number.isFinite(seconds) || seconds <= 0) {
+      return tempCaptureTtlMs;
+    }
+    return Math.trunc(seconds * 1000);
+  };
   const traceMaxEvents = Number(input.traceUtjMaxEvents);
   const optionalHeadOptional = input.headOptionalCostume3dId;
   return {
     imageId,
+    cacheMode,
+    ttlMs: cacheMode === "temporary" ? readTtlMs(input.ttlSeconds) : 0,
     roleId,
     bodyCostume3dId: readId("bodyCostume3dId"),
     headCostume3dId: readId("headCostume3dId"),
@@ -616,8 +634,14 @@ async function captureRoleParts(input) {
     }
     fs.writeFileSync(tempOutputPath, ensurePngRgba(result.png));
     fs.renameSync(tempOutputPath, outputPath);
+    if (request.cacheMode === "temporary" && request.ttlMs > 0) {
+      const expiresAt = Date.now() + request.ttlMs;
+      const gcRelativeMtime = new Date(expiresAt - tempCaptureTtlMs);
+      fs.utimesSync(outputPath, gcRelativeMtime, gcRelativeMtime);
+    }
     return {
       imageId: request.imageId,
+      cacheMode: request.cacheMode,
       output: outputPath,
       snapshots: result.snapshots,
     };
@@ -671,11 +695,50 @@ server.listen(port, "0.0.0.0", () => {
     runtimeRoot,
     captureOutputDir,
     chromium: chromiumPath,
+    tempCaptureTtlMs,
+    captureGCIntervalMs,
   }));
+  startTemporaryCaptureGC();
   void captureSession.ensureStarted().catch((error) => {
     console.error(error instanceof Error ? error.message : String(error));
   });
 });
+
+function startTemporaryCaptureGC() {
+  if (captureGCIntervalMs <= 0 || tempCaptureTtlMs <= 0) {
+    return;
+  }
+  const cleanup = () => {
+    cleanupExpiredTemporaryCaptures(Date.now()).catch((error) => {
+      console.error(error instanceof Error ? error.message : String(error));
+    });
+  };
+  cleanup();
+  const timer = setInterval(cleanup, captureGCIntervalMs);
+  timer.unref?.();
+}
+
+async function cleanupExpiredTemporaryCaptures(nowMs) {
+  let entries;
+  try {
+    entries = await fs.promises.readdir(captureOutputDir, { withFileTypes: true });
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return;
+    }
+    throw error;
+  }
+  await Promise.all(entries
+    .filter((entry) => entry.isFile() && /^tmp_[A-Za-z0-9._-]+\.png$/.test(entry.name))
+    .map(async (entry) => {
+      const filePath = path.join(captureOutputDir, entry.name);
+      const stat = await fs.promises.stat(filePath);
+      if (nowMs - stat.mtimeMs <= tempCaptureTtlMs) {
+        return;
+      }
+      await fs.promises.rm(filePath, { force: true });
+    }));
+}
 
 async function shutdown(signal) {
   await captureSession.stop();

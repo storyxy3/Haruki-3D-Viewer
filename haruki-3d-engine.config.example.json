@@ -9,7 +9,9 @@
     "phase": 0.5,
     "clip": "motion_loop",
     "springRuntimeMode": "unity-prefab",
-    "cameraPreset": "capture"
+    "cameraPreset": "capture",
+    "tempTtl": "6h",
+    "gcInterval": "1h"
   },
   "chromium": {
     "executable": "chromium"
